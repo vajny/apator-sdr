@@ -24,11 +24,32 @@
       color: var(--ink);
     }
     header {
-      padding: 1.25rem 1.5rem 0.5rem;
+      padding: 1.25rem 1.5rem 0.25rem;
       border-bottom: 1px solid var(--line);
     }
     header h1 { font-size: 1.15rem; font-weight: 600; margin: 0; }
-    header p { margin: 0.25rem 0 1rem; color: var(--dim); font-size: 0.9rem; }
+    header p { margin: 0.25rem 0 0.75rem; color: var(--dim); font-size: 0.9rem; }
+    nav { display: flex; gap: 0.25rem; }
+    nav button {
+      background: none;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      color: var(--dim);
+      font: inherit;
+      padding: 0.45rem 0.2rem;
+      margin-right: 1rem;
+      cursor: pointer;
+    }
+    nav button.on { color: var(--ink); border-bottom-color: var(--ink); }
+    nav button .n {
+      display: inline-block;
+      min-width: 1.2rem;
+      margin-left: 0.35rem;
+      padding: 0 0.3rem;
+      border-radius: 8px;
+      background: var(--line);
+      font-size: 0.75rem;
+    }
     main {
       display: grid;
       gap: 1rem;
@@ -55,7 +76,7 @@
     dl { margin: 0.9rem 0 0; display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.8rem; color: var(--dim); font-size: 0.9rem; }
     dt { opacity: 0.8; }
     dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
-    .empty { color: var(--dim); padding: 2rem 1.5rem; }
+    .empty { color: var(--dim); padding: 0 1.5rem 2rem; }
     .dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-right: 0.4rem; background: var(--ok); }
     .dot.bad { background: var(--bad); }
     .sig {
@@ -71,19 +92,59 @@
     .sig > i { display: block; height: 100%; background: var(--ok); }
     .sig.mid > i { background: var(--heat); }
     .sig.weak > i { background: var(--bad); }
+    .add {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.9rem;
+    }
+    .add input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--ink);
+      font: inherit;
+      padding: 0.45rem 0.6rem;
+    }
+    .add button {
+      background: var(--ink);
+      color: var(--bg);
+      border: 0;
+      border-radius: 8px;
+      font: inherit;
+      padding: 0.45rem 0.8rem;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>Apator SDR</h1>
     <p id="status">Načítám…</p>
+    <nav>
+      <button type="button" id="tab-home" class="on">Měřáky</button>
+      <button type="button" id="tab-disc">Discovery <span class="n" id="disc-n">0</span></button>
+    </nav>
   </header>
   <main id="cards"></main>
-  <p class="empty" id="empty" hidden>V konfiguraci addonu přidej sériová čísla z potisku. E-ITN i E-RM vysílají na 868.95 MHz zhruba každé 4 minuty — neslyšené i cizí měřáky se tu objeví, do MQTT jdou jen ty z konfigurace.</p>
+  <main id="disc" hidden></main>
+  <p class="empty" id="empty" hidden></p>
   <script>
     const cards = document.getElementById("cards");
+    const disc = document.getElementById("disc");
     const empty = document.getElementById("empty");
     const status = document.getElementById("status");
+    const tabHome = document.getElementById("tab-home");
+    const tabDisc = document.getElementById("tab-disc");
+    const discN = document.getElementById("disc-n");
+    let tab = "home";
+    let last = { devices: {}, discovery: {} };
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
 
     function fmtTime(t) {
       if (!t) return "—";
@@ -103,42 +164,92 @@
       return `<dt>Signál</dt><dd><span class="sig ${cls}"><i style="width:${pct}%"></i></span>${nums}</dd>`;
     }
 
-    function render(state) {
-      const devices = Object.values(state.devices || {});
-      status.textContent = devices.length
-        ? `Poslední aktualizace ${fmtTime(state.updated)} · ${devices.length} zařízení`
-        : "Čekám na první telegram / konfiguraci";
-      empty.hidden = devices.length > 0;
-      cards.innerHTML = devices.map((d) => {
-        const heat = d.model === "E-ITN30";
-        const unpaired = d.configured === false;
-        const title = d.name || d.code || d.print || d.id;
-        const main = heat
-          ? `${d.current ?? "—"}<span class="unit">jedn.</span>`
-          : `${d.volume_m3 ?? "—"}<span class="unit">m³</span>`;
-        const extra = heat
-          ? `<dt>Loni</dt><dd>${d.last_year ?? "—"}</dd>`
-          : `<dt>Objem</dt><dd>${d.volume_m3 ?? "—"} m³</dd>`;
-        const crc = d.crc_ok === true ? "ok" : d.crc_ok === false ? "fail" : "čekám";
-        const serial = d.print || d.id;
-        const radio = d.print && d.id ? ` · rádio ${d.id}` : "";
-        const kind = (heat ? "E-ITN 30.2" : "E-RM 30") + (unpaired ? " · není v konfiguraci" : "");
-        return `<article class="card ${heat ? "heat" : "water"}">
-          <div class="kind">${kind}</div>
-          <h2>${title}</h2>
-          <div class="value">${main}</div>
-          <dl>
-            ${extra}
-            <dt>Sériové č.</dt><dd>${serial}${radio}</dd>
-            ${d.code ? `<dt>Kód</dt><dd>${d.code}</dd>` : ""}
-            <dt>Datum v paketu</dt><dd>${d.date || "—"}</dd>
-            <dt>Slyšeno</dt><dd>${d.crc_ok == null ? "zatím ne" : fmtTime(d.time || d.heard)}</dd>
-            ${signalRow(d)}
-            <dt>Rádio</dt><dd><span class="dot ${d.crc_ok === true ? "" : "bad"}"></span>CRC ${crc}</dd>
-          </dl>
-        </article>`;
-      }).join("");
+    function meterCard(d, discover) {
+      const heat = d.model === "E-ITN30";
+      const title = d.name || d.code || d.print || d.id;
+      const main = heat
+        ? `${d.current ?? "—"}<span class="unit">jedn.</span>`
+        : `${d.volume_m3 ?? "—"}<span class="unit">m³</span>`;
+      const extra = heat
+        ? `<dt>Loni</dt><dd>${d.last_year ?? "—"}</dd>`
+        : `<dt>Objem</dt><dd>${d.volume_m3 ?? "—"} m³</dd>`;
+      const crc = d.crc_ok === true ? "ok" : d.crc_ok === false ? "fail" : "čekám";
+      const serial = d.print || d.id;
+      const radio = d.print && d.id ? ` · rádio ${d.id}` : "";
+      const add = discover
+        ? `<div class="add">
+            <input data-serial="${esc(serial)}" data-model="${esc(d.model || "E-ITN30")}" value="${esc(title)}" />
+            <button type="button">Přidat</button>
+          </div>`
+        : "";
+      return `<article class="card ${heat ? "heat" : "water"}">
+        <div class="kind">${heat ? "E-ITN 30.2" : "E-RM 30"}</div>
+        <h2>${esc(title)}</h2>
+        <div class="value">${main}</div>
+        <dl>
+          ${extra}
+          <dt>Sériové č.</dt><dd>${esc(serial)}${radio}</dd>
+          ${d.code ? `<dt>Kód</dt><dd>${esc(d.code)}</dd>` : ""}
+          <dt>Datum v paketu</dt><dd>${esc(d.date || "—")}</dd>
+          <dt>Slyšeno</dt><dd>${d.crc_ok == null ? "zatím ne" : fmtTime(d.time || d.heard)}</dd>
+          ${signalRow(d)}
+          <dt>Rádio</dt><dd><span class="dot ${d.crc_ok === true ? "" : "bad"}"></span>CRC ${crc}</dd>
+        </dl>
+        ${add}
+      </article>`;
     }
+
+    function render(state) {
+      last = state;
+      const devices = Object.values(state.devices || {});
+      const found = Object.values(state.discovery || {});
+      discN.textContent = found.length;
+      const home = tab === "home";
+      cards.hidden = !home;
+      disc.hidden = home;
+      status.textContent = devices.length || found.length
+        ? `Poslední aktualizace ${fmtTime(state.updated)} · ${devices.length} měřáků · ${found.length} discovery`
+        : "Čekám na telegram";
+      if (home) {
+        empty.hidden = devices.length > 0;
+        empty.textContent = "Žádný měřák v konfiguraci. Až se ozve, přidej ho v Discovery.";
+        cards.innerHTML = devices.map((d) => meterCard(d, false)).join("");
+      } else {
+        empty.hidden = found.length > 0;
+        empty.textContent = "Žádný cizí CRC ok telegram. E-ITN i E-RM jdou zhruba každé 4 minuty.";
+        disc.innerHTML = found.map((d) => meterCard(d, true)).join("");
+      }
+    }
+
+    tabHome.onclick = () => { tab = "home"; tabHome.classList.add("on"); tabDisc.classList.remove("on"); render(last); };
+    tabDisc.onclick = () => { tab = "disc"; tabDisc.classList.add("on"); tabHome.classList.remove("on"); render(last); };
+
+    disc.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("button");
+      if (!btn || btn.closest(".add") == null) return;
+      const input = btn.parentElement.querySelector("input");
+      btn.disabled = true;
+      try {
+        const r = await fetch("api/devices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            serial: input.dataset.serial,
+            model: input.dataset.model,
+            name: input.value.trim(),
+          }),
+        });
+        if (!r.ok) throw new Error(r.status);
+        const state = await r.json();
+        tab = "home";
+        tabHome.classList.add("on");
+        tabDisc.classList.remove("on");
+        render(state);
+      } catch (e) {
+        status.textContent = "Přidání selhalo: " + e;
+        btn.disabled = false;
+      }
+    });
 
     async function poll() {
       const r = await fetch("api/state");
@@ -150,9 +261,7 @@
     setInterval(() => poll().catch(() => {}), 3000);
     try {
       const es = new EventSource("api/stream");
-      es.onmessage = (ev) => {
-        try { poll(); } catch {}
-      };
+      es.onmessage = () => { poll().catch(() => {}); };
     } catch {}
   </script>
 </body>

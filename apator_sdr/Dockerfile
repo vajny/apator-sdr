@@ -21,7 +21,7 @@ RUN apt-get update \
  && apt-get autoremove -y --purge \
  && rm -rf /tmp/rtl-sdr /tmp/rtl_433 /var/lib/apt/lists/*
 
-ARG BUILD_VERSION=0.1.4
+ARG BUILD_VERSION=0.1.5
 LABEL \
   io.hass.version="${BUILD_VERSION}" \
   io.hass.type="addon" \

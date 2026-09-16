@@ -101,38 +101,113 @@ def load_devices() -> None:
     DEVICES.clear()
     merged: dict[str, dict] = {}
     opts = Path("/data/options.json")
-    ha_list = None
     if opts.exists():
         try:
             raw = json.loads(opts.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             raw = {}
         if isinstance(raw, dict) and isinstance(raw.get("devices"), list):
-            ha_list = raw["devices"]
-    if ha_list is not None:
-        for item in ha_list:
-            if not isinstance(item, dict):
-                continue
-            serial = parse_serial(item.get("serial") or item.get("id") or "")
-            if serial is None:
-                continue
-            merged[str(serial)] = meta_from_row(serial, item)
-    else:
-        for p in (HERE / "devices.json", Path("/data/devices.json"), Path("/config/devices.json")):
-            if not p.exists():
-                continue
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                continue
-            if isinstance(data, dict):
-                merged.update(data)
+            for item in raw["devices"]:
+                if not isinstance(item, dict):
+                    continue
+                serial = parse_serial(item.get("serial") or item.get("id") or "")
+                if serial is None:
+                    continue
+                merged[str(serial)] = meta_from_row(serial, item)
+    for p in (HERE / "devices.json", Path("/data/devices.json"), Path("/config/devices.json")):
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            merged.update(data)
     for k, v in merged.items():
         serial = parse_serial(k)
         if serial is None or not isinstance(v, dict):
             continue
         meta = meta_from_row(serial, v)
         DEVICES[on_air_id(serial, meta)] = meta
+
+
+def devices_as_options() -> list[dict]:
+    rows = []
+    for ident, meta in DEVICES.items():
+        serial = str(meta.get("print") or ident)
+        rows.append({
+            "serial": serial,
+            "name": meta.get("name") or serial,
+            "model": meta.get("model") or "E-ITN30",
+        })
+    return rows
+
+
+def persist_devices() -> None:
+    rows: dict[str, dict] = {}
+    for ident, meta in DEVICES.items():
+        serial = str(parse_serial(meta.get("print")) or ident)
+        rows[serial] = {
+            "model": meta.get("model") or "E-ITN30",
+            "name": meta.get("name") or serial,
+            "print": str(meta.get("print") or serial),
+        }
+    blob = json.dumps(rows, ensure_ascii=False, indent=2) + "\n"
+    targets = [HERE / "devices.json"]
+    if Path("/config").is_dir():
+        targets = [Path("/config/devices.json")]
+    for p in targets:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(blob, encoding="utf-8")
+        except OSError as e:
+            print(f"devices.json: {e}", flush=True)
+    tok = os.environ.get("SUPERVISOR_TOKEN")
+    if not tok:
+        return
+    opts_path = Path("/data/options.json")
+    opts: dict = {}
+    if opts_path.exists():
+        try:
+            opts = json.loads(opts_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            opts = {}
+    body = json.dumps({
+        "options": {
+            "frequency": opts.get("frequency") or SETTINGS.get("frequency") or "868.95M",
+            "gain": opts.get("gain") or SETTINGS.get("gain") or "19.2",
+            "sample_rate": opts.get("sample_rate") or SETTINGS.get("sample_rate") or "1024k",
+            "devices": devices_as_options(),
+        }
+    }).encode()
+    req = urllib.request.Request(
+        "http://supervisor/addons/self/options",
+        data=body,
+        method="POST",
+        headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            r.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        print(f"HA options: {e}", flush=True)
+
+
+def register_device(item: dict) -> dict | None:
+    serial = parse_serial(item.get("serial") or item.get("id") or item.get("print") or "")
+    if serial is None:
+        return None
+    meta = meta_from_row(serial, item)
+    ident = on_air_id(serial, meta)
+    DEVICES[ident] = meta
+    with STATE_LOCK:
+        if ident in STATE:
+            STATE[ident] = annotate(dict(STATE[ident]))
+    persist_devices()
+    rec = STATE.get(ident)
+    if rec:
+        mqtt_send(rec)
+    return {"id": ident, **meta}
 
 
 def crc16(data: bytes, poly: int = 0x8005, init: int = 0xFFFF) -> int:
@@ -440,18 +515,25 @@ def snapshot() -> dict:
                 devices[str(ident)] = annotate(
                     {"id": ident, "model": meta.get("model"), "crc_ok": None}
                 )
+        discovery = {}
         for ident, rec in STATE.items():
-            if str(ident) not in devices:
-                extra = dict(rec)
-                extra["configured"] = False
-                extra.setdefault("print", printed_serial(extra))
-                devices[str(ident)] = extra
+            if ident in DEVICES:
+                continue
+            extra = dict(rec)
+            extra["configured"] = False
+            extra.setdefault("print", printed_serial(extra))
+            discovery[str(ident)] = extra
     updated = None
-    for rec in devices.values():
+    for rec in list(devices.values()) + list(discovery.values()):
         t = rec.get("time") or rec.get("heard")
         if t and (updated is None or t > updated):
             updated = t
-    return {"updated": updated, "devices": devices, "configured": len(DEVICES)}
+    return {
+        "updated": updated,
+        "devices": devices,
+        "discovery": discovery,
+        "configured": len(DEVICES),
+    }
 
 
 def update_state(rec: dict) -> None:
@@ -673,6 +755,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             self._json(snapshot())
             return
+        if path == "/api/discovery":
+            snap = snapshot()
+            self._json({"updated": snap["updated"], "devices": snap["discovery"]})
+            return
         if path == "/api/devices":
             self._json({str(k): v for k, v in DEVICES.items()})
             return
@@ -705,6 +791,28 @@ class Handler(BaseHTTPRequestHandler):
                     SSE.remove(q)
             return
         self.send_error(404)
+
+    def do_POST(self) -> None:
+        path = "/" + "/".join(p for p in self.path.split("?", 1)[0].split("/") if p)
+        if path != "/api/devices":
+            self.send_error(404)
+            return
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if 0 < n < 65536 else b"{}"
+        try:
+            item = json.loads(raw.decode())
+        except json.JSONDecodeError:
+            item = {}
+        if not isinstance(item, dict):
+            item = {}
+        added = register_device(item)
+        if not added:
+            self._json({"ok": False, "error": "špatné sériové číslo"}, 400)
+            return
+        out = snapshot()
+        out["ok"] = True
+        out["device"] = added
+        self._json(out)
 
 
 def start_http() -> ThreadingHTTPServer:
@@ -836,6 +944,16 @@ def self_check() -> None:
     assert 301835244 ^ 0x38000000 == 704488428
     assert on_air_id(301835238, {"model": "E-RM30"}) == 704488422
     assert on_air_id(704488422, {"model": "E-RM30"}) == 704488422
+    prev_state = dict(STATE)
+    STATE.clear()
+    held = dict(DEVICES)
+    DEVICES.clear()
+    STATE[704488604] = {"id": 704488604, "model": "E-RM30", "crc_ok": True, "volume_m3": 1.0}
+    snap = snapshot()
+    assert "704488604" in snap["discovery"] and "704488604" not in snap["devices"]
+    STATE.clear()
+    STATE.update(prev_state)
+    DEVICES.update(held)
     print("self-check ok", flush=True)
 
 
