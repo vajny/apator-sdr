@@ -1,5 +1,5 @@
 name: Apator SDR
-version: "0.1.5"
+version: "0.1.6"
 slug: apator_sdr
 description: Odečet Apator Metra E-ITN 30.2 (teplo) a E-RM 30 (vodoměr) přes RTL-SDR na 868.95 MHz
 url: https://github.com/vajny/apator-sdr

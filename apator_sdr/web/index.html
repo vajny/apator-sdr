@@ -155,8 +155,10 @@
       if (d.snr == null && d.rssi == null) return `<dt>Signál</dt><dd>—</dd>`;
       const snr = d.snr == null ? null : Number(d.snr);
       const rssi = d.rssi == null ? null : Number(d.rssi);
-      const pct = snr == null ? 0 : Math.max(0, Math.min(100, (snr / 40) * 100));
-      const cls = snr == null ? "" : snr >= 25 ? "" : snr >= 18 ? "mid" : "weak";
+      const pct = snr != null
+        ? Math.max(0, Math.min(100, (snr / 40) * 100))
+        : Math.max(0, Math.min(100, ((rssi + 35) / 30) * 100));
+      const cls = (snr != null ? snr : rssi + 40) >= 25 ? "" : (snr != null ? snr : rssi + 40) >= 18 ? "mid" : "weak";
       const nums = [
         snr != null ? `SNR ${snr.toFixed(1)} dB` : null,
         rssi != null ? `RSSI ${rssi.toFixed(1)} dB` : null,

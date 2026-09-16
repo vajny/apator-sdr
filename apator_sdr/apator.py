@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -42,6 +43,7 @@ MQTT_SOCK = None
 MQTT_LOCK = threading.Lock()
 HA_ANNOUNCED: set[int] = set()
 SEEN: dict[int, tuple] = {}
+LOG_LEVEL: dict[str, float] = {}
 
 
 def on_air_id(raw_id: int, meta: dict) -> int:
@@ -410,6 +412,37 @@ def decode_bits(bits: str) -> dict | None:
     return annotate(best) if best else None
 
 
+def _num(msg: dict, *keys):
+    for k in keys:
+        v = msg.get(k)
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def apply_level(msg: dict, rec: dict) -> None:
+    rssi = _num(msg, "rssi", "RSSI", "rssi_db")
+    snr = _num(msg, "snr", "SNR", "snr_db")
+    if rssi is None:
+        rssi = LOG_LEVEL.get("rssi")
+    if snr is None:
+        snr = LOG_LEVEL.get("snr")
+    if rssi is not None:
+        rec["rssi"] = rssi
+    if snr is not None:
+        rec["snr"] = snr
+
+
+def note_log_level(line: str) -> None:
+    m = re.match(r"(rssi|snr)\s*[:=]\s*(-?[\d.]+)", line.strip(), re.I)
+    if m:
+        LOG_LEVEL[m.group(1).lower()] = float(m.group(2))
+
+
 def decode_native(msg: dict) -> dict | None:
     model = msg.get("model", "")
     if model == "ApatorMetra-ERM30":
@@ -444,8 +477,7 @@ def handle_rtl_line(line: str) -> dict | None:
         return None
     native = decode_native(msg)
     if native:
-        native["rssi"] = msg.get("rssi")
-        native["snr"] = msg.get("snr")
+        apply_level(msg, native)
         native["time"] = msg.get("time")
         return annotate(native)
     if msg.get("model") not in ("Apator", "Apator_flex", "ApatorMetra-ERM30", "ApatorMetra-EITN30"):
@@ -456,8 +488,7 @@ def handle_rtl_line(line: str) -> dict | None:
     rec = decode_bits(bits_from_codes(codes))
     if not rec:
         return None
-    rec["rssi"] = msg.get("rssi")
-    rec["snr"] = msg.get("snr")
+    apply_level(msg, rec)
     rec["time"] = msg.get("time")
     rec["src"] = "flex"
     rec["codes"] = codes
@@ -539,8 +570,16 @@ def snapshot() -> dict:
 def update_state(rec: dict) -> None:
     if not rec.get("crc_ok"):
         return
+    rec = dict(rec)
+    ident = int(rec["id"])
     with STATE_LOCK:
-        STATE[int(rec["id"])] = rec
+        prev = STATE.get(ident)
+        if prev:
+            if rec.get("rssi") is None:
+                rec["rssi"] = prev.get("rssi")
+            if rec.get("snr") is None:
+                rec["snr"] = prev.get("snr")
+        STATE[ident] = rec
     for q in list(SSE):
         try:
             q.put_nowait(rec)
@@ -715,7 +754,10 @@ def already_seen(rec: dict) -> bool:
 
 
 def on_packet(rec: dict) -> None:
-    if already_seen(rec):
+    dup = already_seen(rec)
+    if dup:
+        if rec.get("crc_ok") and (rec.get("snr") is not None or rec.get("rssi") is not None):
+            update_state(rec)
         return
     known = int(rec["id"]) in DEVICES
     if not rec.get("crc_ok") and not known:
@@ -954,6 +996,17 @@ def self_check() -> None:
     STATE.clear()
     STATE.update(prev_state)
     DEVICES.update(held)
+    rec = {"id": 1, "model": "E-RM30", "crc_ok": True, "volume_m3": 1.0}
+    update_state(rec)
+    update_state({"id": 1, "model": "E-RM30", "crc_ok": True, "volume_m3": 1.0, "snr": 28.4, "rssi": -12.0})
+    assert STATE[1]["snr"] == 28.4
+    note_log_level("snr      : 21.5 dB")
+    note_log_level("rssi     : -18.2 dB")
+    tagged = {}
+    apply_level({}, tagged)
+    assert tagged["snr"] == 21.5 and tagged["rssi"] == -18.2
+    LOG_LEVEL.clear()
+    STATE.pop(1, None)
     print("self-check ok", flush=True)
 
 
@@ -982,6 +1035,8 @@ def listen() -> int:
                         break
                     if not line:
                         continue
+                    if not line.lstrip().startswith("{"):
+                        note_log_level(line)
                     try:
                         rec = handle_rtl_line(line)
                     except Exception as e:
