@@ -4,6 +4,13 @@ Všechny podstatné změny v Apator SDR. Formát [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-09-17
+
+### Added
+
+- Karta **Prostředí**: šum, práh, zisk, CRC fail %, telegramy/min, počet slyšených ID, stav klidné/rušné/přebuzené.
+- Stejné údaje do MQTT jako diagnostika *Apator SDR rádio*.
+
 ## [0.1.9] - 2026-09-17
 
 ### Fixed

@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -44,6 +45,11 @@ MQTT_LOCK = threading.Lock()
 HA_ANNOUNCED: set[int] = set()
 SEEN: dict[int, tuple] = {}
 LOG_LEVEL: dict[str, float] = {}
+RADIO: dict = {}
+EVENTS: deque = deque()
+RADIO_MQTT_AT = 0.0
+HA_RADIO = False
+WINDOW_S = 900
 
 
 def on_air_id(raw_id: int, meta: dict) -> int:
@@ -453,7 +459,95 @@ def note_log_level(line: str) -> None:
         LOG_LEVEL[m.group(1).lower()] = float(m.group(2))
     m = re.search(r"(?:Tuner gain set to|Set initial gain for FC0012 to)\s*(.+)", s, re.I)
     if m:
-        print("aktivní zisk:", m.group(1).rstrip("."), flush=True)
+        txt = m.group(1).rstrip(".")
+        print("aktivní zisk:", txt, flush=True)
+        RADIO["gain_text"] = txt
+        gm = re.search(r"(-?[\d.]+)", txt)
+        if gm:
+            RADIO["gain_db"] = float(gm.group(1))
+    note_auto_level(s)
+
+
+def note_auto_level(s: str) -> None:
+    m = re.search(
+        r"Current noise level\s*(-?[\d.]+)\s*dB.*?estimated noise\s*(-?[\d.]+)\s*dB",
+        s,
+        re.I,
+    )
+    if m:
+        RADIO["level"] = float(m.group(1))
+        RADIO["noise"] = float(m.group(2))
+        mqtt_radio_maybe()
+        return
+    m = re.search(
+        r"Estimated noise level is\s*(-?[\d.]+)\s*dB.*?minimum detection level to\s*(-?[\d.]+)\s*dB",
+        s,
+        re.I,
+    )
+    if m:
+        RADIO["noise"] = float(m.group(1))
+        RADIO["threshold"] = float(m.group(2))
+        mqtt_radio_maybe()
+
+
+def radio_hit(kind: str, ident: int | None = None, snr=None) -> None:
+    EVENTS.append((time.time(), kind, ident, snr))
+    now = time.time()
+    while EVENTS and now - EVENTS[0][0] > WINDOW_S:
+        EVENTS.popleft()
+    mqtt_radio_maybe()
+
+
+def radio_snapshot() -> dict:
+    now = time.time()
+    while EVENTS and now - EVENTS[0][0] > WINDOW_S:
+        EVENTS.popleft()
+    ok = fail = junk = 0
+    ids: set[int] = set()
+    snrs: list[float] = []
+    for _ts, kind, ident, snr in EVENTS:
+        if kind == "ok":
+            ok += 1
+            if ident is not None:
+                ids.add(ident)
+        elif kind == "fail":
+            fail += 1
+        else:
+            junk += 1
+        if snr is not None:
+            try:
+                snrs.append(float(snr))
+            except (TypeError, ValueError):
+                pass
+    n = ok + fail
+    fail_pct = round(100.0 * fail / n, 1) if n else 0.0
+    total = ok + fail + junk
+    ppm = round(total / (WINDOW_S / 60.0), 2)
+    noise = RADIO.get("noise")
+    if noise is None:
+        band = "—"
+    elif noise >= -20:
+        band = "přebuzené"
+    elif noise >= -30 or fail_pct >= 40 or len(ids) >= 8:
+        band = "rušné"
+    else:
+        band = "klidné"
+    return {
+        "noise_db": RADIO.get("noise"),
+        "threshold_db": RADIO.get("threshold"),
+        "level_db": RADIO.get("level"),
+        "gain_db": RADIO.get("gain_db"),
+        "gain_text": RADIO.get("gain_text"),
+        "band": band,
+        "ppm": ppm,
+        "crc_ok": ok,
+        "crc_fail": fail,
+        "undecoded": junk,
+        "fail_pct": fail_pct,
+        "unique": len(ids),
+        "snr_avg": round(sum(snrs) / len(snrs), 1) if snrs else None,
+        "window_min": WINDOW_S // 60,
+    }
 
 
 def decode_native(msg: dict) -> dict | None:
@@ -629,6 +723,7 @@ def snapshot() -> dict:
         "devices": devices,
         "discovery": discovery,
         "configured": len(DEVICES),
+        "radio": radio_snapshot(),
     }
 
 
@@ -745,6 +840,7 @@ def mqtt_keepalive_loop() -> None:
                 MQTT_SOCK.sendall(b"\xc0\x00")
             except OSError as e:
                 _mqtt_drop(e)
+        mqtt_radio_maybe()
 
 
 def ha_announce(rec: dict) -> None:
@@ -789,6 +885,58 @@ def ha_announce(rec: dict) -> None:
     HA_ANNOUNCED.add(ident)
 
 
+def ha_announce_radio() -> None:
+    global HA_RADIO
+    if HA_RADIO:
+        return
+    device = {
+        "identifiers": ["apator_sdr_radio"],
+        "name": "Apator SDR rádio",
+        "manufacturer": "rtl_433",
+        "model": "RTL-SDR",
+    }
+    state = "apator/radio/state"
+    sensors = [
+        ("sum", "Šum", "{{ value_json.noise_db }}", "dB", "mdi:waveform"),
+        ("prah", "Práh detekce", "{{ value_json.threshold_db }}", "dB", "mdi:tune"),
+        ("zisk", "Zisk tuneru", "{{ value_json.gain_db }}", "dB", "mdi:volume-equal"),
+        ("crc_fail", "CRC fail", "{{ value_json.fail_pct }}", "%", "mdi:alert"),
+        ("slyseno", "Slyšených ID", "{{ value_json.unique }}", None, "mdi:access-point"),
+        ("telegramy", "Telegramy/min", "{{ value_json.ppm }}", "1/min", "mdi:pulse"),
+        ("pasmo", "Pásmo 868", "{{ value_json.band }}", None, "mdi:radio-tower"),
+    ]
+    for key, label, tmpl, unit, icon in sensors:
+        cfg = {
+            "name": label,
+            "unique_id": f"apator_radio_{key}",
+            "state_topic": state,
+            "value_template": tmpl,
+            "device": device,
+            "entity_category": "diagnostic",
+            "icon": icon,
+        }
+        if unit:
+            cfg["unit_of_measurement"] = unit
+            cfg["state_class"] = "measurement"
+        if not mqtt_publish(f"homeassistant/sensor/apator_radio_{key}/config", json.dumps(cfg), True):
+            return
+    HA_RADIO = True
+
+
+def mqtt_radio_maybe(force: bool = False) -> None:
+    global RADIO_MQTT_AT
+    if not SETTINGS.get("mqtt_host"):
+        return
+    now = time.time()
+    if not force and now - RADIO_MQTT_AT < 15:
+        return
+    ha_announce_radio()
+    if not HA_RADIO:
+        return
+    RADIO_MQTT_AT = now
+    mqtt_publish("apator/radio/state", json.dumps(radio_snapshot()), True)
+
+
 def mqtt_send(rec: dict) -> None:
     if not rec.get("crc_ok"):
         return
@@ -828,6 +976,11 @@ def on_packet(rec: dict) -> None:
             update_state(rec)
         return
     print(fmt(rec), flush=True)
+    radio_hit(
+        "ok" if rec.get("crc_ok") else "fail",
+        rec.get("id"),
+        rec.get("snr"),
+    )
     known = int(rec["id"]) in DEVICES
     if rec.get("crc_ok") or known:
         append_log(rec)
@@ -1135,6 +1288,21 @@ def self_check() -> None:
         SETTINGS.pop("gain", None)
     else:
         SETTINGS["gain"] = prev_g
+    EVENTS.clear()
+    RADIO.clear()
+    note_log_level("Auto Level: Current noise level -15.5 dB, estimated noise -15.4 dB")
+    assert RADIO.get("noise") == -15.4 and RADIO.get("level") == -15.5
+    note_log_level("Auto Level: Estimated noise level is -38.7 dB, adjusting minimum detection level to -35.7 dB")
+    assert RADIO.get("noise") == -38.7 and RADIO.get("threshold") == -35.7
+    EVENTS.clear()
+    radio_hit("ok", 704488422, 30.0)
+    st = radio_snapshot()
+    assert st["crc_ok"] == 1 and st["band"] == "klidné" and st["unique"] == 1
+    RADIO["noise"] = -15.0
+    assert radio_snapshot()["band"] == "přebuzené"
+    assert "radio" in snapshot()
+    EVENTS.clear()
+    RADIO.clear()
     print("self-check ok", flush=True)
 
 
@@ -1185,6 +1353,7 @@ def listen() -> int:
                         miss = fmt_undecoded(line)
                         if miss:
                             print(miss, flush=True)
+                            radio_hit("junk")
                     elif line.strip():
                         print(line.rstrip(), flush=True)
             finally:
@@ -1240,6 +1409,7 @@ def main(argv: list[str]) -> int:
         threading.Thread(target=mqtt_keepalive_loop, daemon=True).start()
         for rec in list(STATE.values()):
             mqtt_send(rec)
+        mqtt_radio_maybe(True)
     else:
         print("mqtt vypnuté (nastav MQTT_HOST nebo HA mosquitto)", flush=True)
     return listen()

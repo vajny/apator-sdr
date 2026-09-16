@@ -91,7 +91,11 @@
     }
     .sig > i { display: block; height: 100%; background: var(--ok); }
     .sig.mid > i { background: var(--heat); }
-    .sig.weak > i { background: var(--bad); }
+    .card.radio .kind { color: var(--dim); }
+    .card.radio .value { font-size: 1.6rem; }
+    .band-ok { color: var(--ok); }
+    .band-mid { color: var(--heat); }
+    .band-hot { color: var(--bad); }
     .add {
       display: flex;
       gap: 0.5rem;
@@ -166,6 +170,33 @@
       return `<dt>Signál</dt><dd><span class="sig ${cls}"><i style="width:${pct}%"></i></span>${nums}</dd>`;
     }
 
+    function radioCard(r) {
+      if (!r) return "";
+      const noise = r.noise_db;
+      const pct = noise == null
+        ? 0
+        : Math.max(0, Math.min(100, ((Number(noise) + 50) / 40) * 100));
+      const band = r.band || "—";
+      const cls = band === "přebuzené" ? "band-hot" : band === "rušné" ? "band-mid" : "band-ok";
+      const sigCls = pct >= 70 ? "weak" : pct >= 45 ? "mid" : "";
+      const n = (v, d=1) => v == null ? "—" : Number(v).toFixed(d);
+      return `<article class="card radio">
+        <div class="kind">Pásmo 868.95 MHz</div>
+        <h2>Prostředí</h2>
+        <div class="value ${cls}">${esc(band)}</div>
+        <dl>
+          <dt>Zarušení</dt><dd><span class="sig ${sigCls}"><i style="width:${pct}%"></i></span>šum ${n(noise)} dB</dd>
+          <dt>Práh</dt><dd>${n(r.threshold_db)} dB</dd>
+          <dt>Zisk</dt><dd>${r.gain_db == null ? "—" : n(r.gain_db) + " dB"}</dd>
+          <dt>Telegramy</dt><dd>${r.crc_ok ?? 0} ok / ${r.crc_fail ?? 0} fail · ${n(r.ppm)} /min</dd>
+          <dt>CRC fail</dt><dd>${n(r.fail_pct, 0)} % za ${r.window_min} min</dd>
+          <dt>Cizí+vlastní ID</dt><dd>${r.unique ?? 0}</dd>
+          <dt>Nedešifrováno</dt><dd>${r.undecoded ?? 0}</dd>
+          ${r.snr_avg != null ? `<dt>SNR průměr</dt><dd>${n(r.snr_avg)} dB</dd>` : ""}
+        </dl>
+      </article>`;
+    }
+
     function meterCard(d, discover) {
       const heat = d.model === "E-ITN30";
       const title = d.name || d.code || d.print || d.id;
@@ -210,12 +241,17 @@
       cards.hidden = !home;
       disc.hidden = home;
       status.textContent = devices.length || found.length
-        ? `Poslední aktualizace ${fmtTime(state.updated)} · ${devices.length} měřáků · ${found.length} discovery`
-        : "Čekám na telegram";
+        ? `Poslední aktualizace ${fmtTime(state.updated)} · ${devices.length} měřáků · ${found.length} discovery · ${state.radio?.band || "—"}`
+        : (state.radio?.noise_db != null
+          ? `Šum ${Number(state.radio.noise_db).toFixed(1)} dB · ${state.radio.band} · čekám na telegram`
+          : "Čekám na telegram");
       if (home) {
-        empty.hidden = devices.length > 0;
-        empty.textContent = "Žádný měřák v konfiguraci. Až se ozve, přidej ho v Discovery.";
-        cards.innerHTML = devices.map((d) => meterCard(d, false)).join("");
+        empty.hidden = true;
+        cards.innerHTML = radioCard(state.radio) + devices.map((d) => meterCard(d, false)).join("");
+        if (!devices.length) {
+          empty.hidden = false;
+          empty.textContent = "Žádný měřák v konfiguraci. Až se ozve, přidej ho v Discovery.";
+        }
       } else {
         empty.hidden = found.length > 0;
         empty.textContent = "Žádný cizí CRC ok telegram. E-ITN i E-RM jdou zhruba každé 4 minuty.";
