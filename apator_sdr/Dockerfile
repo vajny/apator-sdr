@@ -1,11 +1,5 @@
 FROM debian:bookworm-slim
 
-ARG BUILD_VERSION=0.1.3
-LABEL \
-  io.hass.version="${BUILD_VERSION}" \
-  io.hass.type="addon" \
-  io.hass.arch="aarch64|amd64|armv7"
-
 # rtl-sdr-blog = R828D / RTL-SDR V4. Debian librtlsdr hlásí FC0012 a zisk max 19.2.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -26,6 +20,12 @@ RUN apt-get update \
  && apt-get purge -y git cmake make g++ pkg-config libusb-1.0-0-dev \
  && apt-get autoremove -y --purge \
  && rm -rf /tmp/rtl-sdr /tmp/rtl_433 /var/lib/apt/lists/*
+
+ARG BUILD_VERSION=0.1.4
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="addon" \
+  io.hass.arch="aarch64|amd64|armv7"
 
 WORKDIR /opt/apator
 COPY apator.py ./

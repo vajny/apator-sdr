@@ -41,6 +41,7 @@ SETTINGS: dict = {}
 MQTT_SOCK = None
 MQTT_LOCK = threading.Lock()
 HA_ANNOUNCED: set[int] = set()
+SEEN: dict[int, tuple] = {}
 
 
 def on_air_id(raw_id: int, meta: dict) -> int:
@@ -616,7 +617,27 @@ def mqtt_send(rec: dict) -> None:
     mqtt_publish(f"apator/{rec['id']}/state", json.dumps(slim, ensure_ascii=False), True)
 
 
+def already_seen(rec: dict) -> bool:
+    ident = int(rec["id"])
+    sig = (
+        str(rec.get("time") or "")[:19],
+        rec.get("volume_m3"),
+        rec.get("current"),
+        rec.get("date"),
+        rec.get("crc_ok"),
+    )
+    if SEEN.get(ident) == sig:
+        return True
+    SEEN[ident] = sig
+    return False
+
+
 def on_packet(rec: dict) -> None:
+    if already_seen(rec):
+        return
+    known = int(rec["id"]) in DEVICES
+    if not rec.get("crc_ok") and not known:
+        return
     print(fmt(rec), flush=True)
     append_log(rec)
     if rec.get("crc_ok"):
@@ -746,8 +767,13 @@ def rtl_cmd() -> list[str]:
         "-f", str(SETTINGS.get("frequency") or "868.95M"),
         "-s", str(SETTINGS.get("sample_rate") or "1024k"),
         "-g", str(SETTINGS.get("gain") or "40.2"),
+        "-Y", "minmax",
+        "-Y", "autolevel",
         "-M", "level",
+        "-R", "0",
+        "-R", "277",
         "-X", "n=Apator,m=FSK_PCM,s=25,l=25,r=5000,preamble=aaaa699a",
+        "-F", "log",
         "-F", "json",
     ]
     if shutil.which("stdbuf"):
@@ -823,7 +849,9 @@ def listen() -> int:
             print("poslouchám", SETTINGS.get("frequency"), flush=True)
             print(" ", " ".join(cmd), flush=True)
             try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1)
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+                )
             except FileNotFoundError:
                 print("rtl_433 chybí v image, čekám 10s", flush=True)
                 time.sleep(10)
@@ -845,7 +873,13 @@ def listen() -> int:
                         seen += 1
                         on_packet(rec)
                     elif line.strip() and not line.lstrip().startswith("{"):
-                        print(line.rstrip(), flush=True)
+                        msg = line.rstrip()
+                        print(msg, flush=True)
+                        if "FC0012" in msg:
+                            print(
+                                "tuner je FC0012 (I2C), ne R828D — zisk max 19.2, 40.2 se ignoruje",
+                                flush=True,
+                            )
             finally:
                 if proc.poll() is None:
                     proc.terminate()
