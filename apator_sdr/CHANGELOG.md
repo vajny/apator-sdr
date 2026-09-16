@@ -4,6 +4,12 @@ Všechny podstatné změny v Apator SDR. Formát [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-09-17
+
+### Fixed
+
+- `gain=0` je u rtl_433 Auto, ne 0 dB. Log teď napíše `aktivní zisk` a `-v`, ať je vidět co tuner fakt nastavil.
+
 ## [0.1.7] - 2026-09-17
 
 ### Changed

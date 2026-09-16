@@ -447,9 +447,13 @@ def apply_level(msg: dict, rec: dict) -> None:
 
 
 def note_log_level(line: str) -> None:
-    m = re.match(r"(rssi|snr)\s*[:=]\s*(-?[\d.]+)", line.strip(), re.I)
+    s = line.strip()
+    m = re.match(r"(rssi|snr)\s*[:=]\s*(-?[\d.]+)", s, re.I)
     if m:
         LOG_LEVEL[m.group(1).lower()] = float(m.group(2))
+    m = re.search(r"(?:Tuner gain set to|Set initial gain for FC0012 to)\s*(.+)", s, re.I)
+    if m:
+        print("aktivní zisk:", m.group(1).rstrip("."), flush=True)
 
 
 def decode_native(msg: dict) -> dict | None:
@@ -978,16 +982,27 @@ def rtl_gain() -> str:
     g = SETTINGS.get("gain")
     if g is None or g == "":
         return "19.2"
-    return str(g)
+    return str(g).strip()
+
+
+def gain_is_auto(g: str | None = None) -> bool:
+    # rtl_433: atof(g)*10 == 0 → Auto, not 0 dB. See sdr_set_tuner_gain.
+    s = (g if g is not None else rtl_gain()).strip().lower().replace(",", ".")
+    if s in ("auto", ""):
+        return True
+    try:
+        return abs(float(s)) < 0.05
+    except ValueError:
+        return False
 
 
 def rtl_cmd() -> list[str]:
     cmd = [
         "rtl_433",
         "-d", "0",
+        "-v",
         "-f", str(SETTINGS.get("frequency") or "868.95M"),
         "-s", str(SETTINGS.get("sample_rate") or "1024k"),
-        "-g", rtl_gain(),
         "-Y", "minmax",
         "-Y", "autolevel",
         "-M", "level",
@@ -998,6 +1013,9 @@ def rtl_cmd() -> list[str]:
         "-F", "log",
         "-F", "json",
     ]
+    g = rtl_gain()
+    if not gain_is_auto(g):
+        cmd[4:4] = ["-g", g]
     if shutil.which("stdbuf"):
         cmd = ["stdbuf", "-oL", *cmd]
     return cmd
@@ -1097,6 +1115,15 @@ def self_check() -> None:
     assert "RSSI -1.2" in line and "CRC fail" in line and "flex" in line and "301835238" in line, line
     miss = fmt_undecoded('{"time":"t","model":"Apator","codes":["{10}abcd"],"rssi":-9}')
     assert miss and "nešlo dekódovat" in miss and "abcd" in miss, miss
+    prev_g = SETTINGS.get("gain")
+    SETTINGS["gain"] = "0"
+    assert gain_is_auto() and "-g" not in rtl_cmd()
+    SETTINGS["gain"] = "19.2"
+    assert not gain_is_auto() and "19.2" in rtl_cmd()
+    if prev_g is None:
+        SETTINGS.pop("gain", None)
+    else:
+        SETTINGS["gain"] = prev_g
     print("self-check ok", flush=True)
 
 
@@ -1107,6 +1134,11 @@ def listen() -> int:
     try:
         while True:
             cmd = rtl_cmd()
+            g = rtl_gain()
+            if gain_is_auto(g):
+                print("aktivní zisk: Auto  (0 v konfiguraci u rtl_433 není 0 dB)", flush=True)
+            else:
+                print(f"aktivní zisk: žádám {g} dB", flush=True)
             print("poslouchám", SETTINGS.get("frequency"), flush=True)
             print(" ", " ".join(cmd), flush=True)
             try:
@@ -1171,7 +1203,8 @@ def main(argv: list[str]) -> int:
     load_latest()
     start_http()
     print(
-        f"měřáků v konfiguraci: {len(DEVICES)}  gain={rtl_gain()}  "
+        f"měřáků v konfiguraci: {len(DEVICES)}  gain={rtl_gain()}"
+        f"{' (Auto)' if gain_is_auto() else ' dB'}  "
         f"{SETTINGS.get('frequency')}  {SETTINGS.get('sample_rate')}",
         flush=True,
     )
