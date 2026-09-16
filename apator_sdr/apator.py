@@ -151,6 +151,13 @@ def devices_as_options() -> list[dict]:
     return rows
 
 
+def _opt(opts: dict, key: str, fallback):
+    v = opts.get(key)
+    if v is None or v == "":
+        v = fallback
+    return v
+
+
 def persist_devices() -> None:
     rows: dict[str, dict] = {}
     for ident, meta in DEVICES.items():
@@ -180,11 +187,14 @@ def persist_devices() -> None:
             opts = json.loads(opts_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             opts = {}
+    inner = opts.get("options")
+    if isinstance(inner, dict):
+        opts = {**opts, **inner}
     body = json.dumps({
         "options": {
-            "frequency": opts.get("frequency") or SETTINGS.get("frequency") or "868.95M",
-            "gain": opts.get("gain") or SETTINGS.get("gain") or "19.2",
-            "sample_rate": opts.get("sample_rate") or SETTINGS.get("sample_rate") or "1024k",
+            "frequency": _opt(opts, "frequency", SETTINGS.get("frequency") or "868.95M"),
+            "gain": _opt(opts, "gain", SETTINGS.get("gain") or "19.2"),
+            "sample_rate": _opt(opts, "sample_rate", SETTINGS.get("sample_rate") or "1024k"),
             "devices": devices_as_options(),
         }
     }).encode()
@@ -457,7 +467,10 @@ def note_log_level(line: str) -> None:
     m = re.match(r"(rssi|snr)\s*[:=]\s*(-?[\d.]+)", s, re.I)
     if m:
         LOG_LEVEL[m.group(1).lower()] = float(m.group(2))
-    m = re.search(r"(?:Tuner gain set to|Set initial gain for FC0012 to)\s*(.+)", s, re.I)
+    m = re.search(r"Found (.+?) tuner", s, re.I)
+    if m:
+        RADIO["tuner"] = m.group(1).strip()
+    m = re.search(r"Tuner gain set to\s*(.+)", s, re.I)
     if m:
         txt = m.group(1).rstrip(".")
         print("aktivní zisk:", txt, flush=True)
@@ -465,6 +478,10 @@ def note_log_level(line: str) -> None:
         gm = re.search(r"(-?[\d.]+)", txt)
         if gm:
             RADIO["gain_db"] = float(gm.group(1))
+        return
+    m = re.search(r"Set initial gain for FC0012 to\s*(.+)", s, re.I)
+    if m:
+        print("aktivní zisk (FC0012 start):", m.group(1).rstrip("."), flush=True)
     note_auto_level(s)
 
 
@@ -537,7 +554,9 @@ def radio_snapshot() -> dict:
         "threshold_db": RADIO.get("threshold"),
         "level_db": RADIO.get("level"),
         "gain_db": RADIO.get("gain_db"),
+        "gain_asked": RADIO.get("gain_asked"),
         "gain_text": RADIO.get("gain_text"),
+        "tuner": RADIO.get("tuner"),
         "band": band,
         "ppm": ppm,
         "crc_ok": ok,
@@ -900,6 +919,7 @@ def ha_announce_radio() -> None:
         ("sum", "Šum", "{{ value_json.noise_db }}", "dB", "mdi:waveform"),
         ("prah", "Práh detekce", "{{ value_json.threshold_db }}", "dB", "mdi:tune"),
         ("zisk", "Zisk tuneru", "{{ value_json.gain_db }}", "dB", "mdi:volume-equal"),
+        ("zisk_config", "Zisk z konfigurace", "{{ value_json.gain_asked }}", "dB", "mdi:cog"),
         ("crc_fail", "CRC fail", "{{ value_json.fail_pct }}", "%", "mdi:alert"),
         ("slyseno", "Slyšených ID", "{{ value_json.unique }}", None, "mdi:access-point"),
         ("telegramy", "Telegramy/min", "{{ value_json.ppm }}", "1/min", "mdi:pulse"),
@@ -1118,17 +1138,42 @@ def load_settings() -> dict:
         "mqtt_user": os.environ.get("MQTT_USER", ""),
         "mqtt_password": os.environ.get("MQTT_PASSWORD", ""),
     }
-    for p in (Path("/data/options.json"), HERE / "options.json"):
-        if p.exists():
-            raw = json.loads(p.read_text(encoding="utf-8"))
-            for k, v in raw.items():
-                if k == "devices" or v in (None, ""):
-                    continue
-                s[k] = v
+    merge_radio_options(s)
     sup = _mqtt_from_supervisor()
     if not s.get("mqtt_host") and sup.get("mqtt_host"):
         s.update(sup)
     return s
+
+
+def read_addon_options() -> dict:
+    merged: dict = {}
+    for p in (Path("/data/options.json"), HERE / "options.json"):
+        if not p.exists():
+            continue
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        inner = raw.get("options")
+        if isinstance(inner, dict):
+            merged.update(inner)
+        for k, v in raw.items():
+            if k != "options":
+                merged[k] = v
+    return merged
+
+
+def merge_radio_options(s: dict) -> None:
+    raw = read_addon_options()
+    for k in ("frequency", "gain", "sample_rate"):
+        if k not in raw:
+            continue
+        v = raw[k]
+        if v is None or v == "":
+            continue
+        s[k] = str(v).strip()
 
 
 def rtl_gain() -> str:
@@ -1139,7 +1184,7 @@ def rtl_gain() -> str:
 
 
 def gain_is_auto(g: str | None = None) -> bool:
-    s = (g if g is not None else rtl_gain()).strip().lower()
+    s = str(g if g is not None else rtl_gain()).strip().lower()
     return s == "auto"
 
 
@@ -1282,8 +1327,11 @@ def self_check() -> None:
     assert rtl_gain_arg() == "-9.9" and "-9.9" in rtl_cmd()
     SETTINGS["gain"] = "auto"
     assert gain_is_auto() and "-g" not in rtl_cmd()
-    SETTINGS["gain"] = "19.2"
-    assert rtl_gain_arg() == "19.2" and "19.2" in rtl_cmd()
+    SETTINGS["gain"] = 18
+    assert rtl_gain() == "18" and rtl_gain_arg() == "18"
+    note_log_level("Found Fitipower FC0012 tuner")
+    note_log_level("SDR: Tuner gain set to 19.200000 dB.")
+    assert RADIO.get("tuner", "").startswith("Fitipower") and RADIO.get("gain_db") == 19.2
     if prev_g is None:
         SETTINGS.pop("gain", None)
     else:
@@ -1312,9 +1360,15 @@ def listen() -> int:
         print("USB v kontejneru není — vypni Protection mode, zkus USB 2.", flush=True)
     try:
         while True:
+            merge_radio_options(SETTINGS)
             cmd = rtl_cmd()
             asked = rtl_gain()
             got = rtl_gain_arg()
+            try:
+                RADIO["gain_asked"] = float(str(asked).replace(",", "."))
+            except ValueError:
+                RADIO["gain_asked"] = None
+            print(f"config gain={asked!r}  options={read_addon_options().get('gain')!r}", flush=True)
             if got is None:
                 print("aktivní zisk: Auto", flush=True)
             elif got != asked:

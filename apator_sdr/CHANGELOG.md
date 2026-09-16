@@ -4,6 +4,16 @@ Všechny podstatné změny v Apator SDR. Formát [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-09-17
+
+### Changed
+
+- Zisk je výběr kroků tuneru (19.2 / 17.9 / 7.1 / −4.0 / −9.9 / auto), ne volné číslo. 18 tam už nezadáš.
+
+### Fixed
+
+- Zisk z konfigurace se bere z options.json i po uložení. UI ukáže žádaný vs. krok tuneru.
+
 ## [0.1.10] - 2026-09-17
 
 ### Added

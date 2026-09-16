@@ -180,6 +180,15 @@
       const cls = band === "přebuzené" ? "band-hot" : band === "rušné" ? "band-mid" : "band-ok";
       const sigCls = pct >= 70 ? "weak" : pct >= 45 ? "mid" : "";
       const n = (v, d=1) => v == null ? "—" : Number(v).toFixed(d);
+      function gainLine(r) {
+        const asked = r.gain_asked;
+        const got = r.gain_db;
+        if (asked == null && got == null) return "—";
+        if (asked != null && got != null && Math.abs(Number(asked) - Number(got)) > 0.15)
+          return `${n(asked)} → ${n(got)} dB (krok tuneru)`;
+        if (got != null) return `${n(got)} dB`;
+        return `${n(asked)} dB`;
+      }
       return `<article class="card radio">
         <div class="kind">Pásmo 868.95 MHz</div>
         <h2>Prostředí</h2>
@@ -187,7 +196,7 @@
         <dl>
           <dt>Zarušení</dt><dd><span class="sig ${sigCls}"><i style="width:${pct}%"></i></span>šum ${n(noise)} dB</dd>
           <dt>Práh</dt><dd>${n(r.threshold_db)} dB</dd>
-          <dt>Zisk</dt><dd>${r.gain_db == null ? "—" : n(r.gain_db) + " dB"}</dd>
+          <dt>Zisk</dt><dd>${gainLine(r)}</dd>
           <dt>Telegramy</dt><dd>${r.crc_ok ?? 0} ok / ${r.crc_fail ?? 0} fail · ${n(r.ppm)} /min</dd>
           <dt>CRC fail</dt><dd>${n(r.fail_pct, 0)} % za ${r.window_min} min</dd>
           <dt>Cizí+vlastní ID</dt><dd>${r.unique ?? 0}</dd>

@@ -4,7 +4,7 @@ configuration:
     description: Střed RTL-SDR. Apator Metra vysílá na 868.95M.
   gain:
     name: Zisk tuneru
-    description: Číslo v dB. 0 = nejnižší zisk (ne Auto). auto = AGC.
+    description: Kroky tuneru v dB. auto = AGC (u stupaček to ohluchne).
   sample_rate:
     name: Vzorkování
   devices:

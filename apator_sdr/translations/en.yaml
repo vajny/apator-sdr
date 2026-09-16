@@ -4,7 +4,7 @@ configuration:
     description: RTL-SDR center frequency (Apator Metra uses 868.95M).
   gain:
     name: Tuner gain
-    description: A number is dB. 0 = tuner minimum (not Auto). auto = AGC.
+    description: Tuner steps in dB. auto = AGC (goes deaf next to the meters).
   sample_rate:
     name: Sample rate
   devices:
