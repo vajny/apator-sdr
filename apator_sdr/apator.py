@@ -427,6 +427,7 @@ def _num(msg: dict, *keys):
 def apply_level(msg: dict, rec: dict) -> None:
     rssi = _num(msg, "rssi", "RSSI", "rssi_db")
     snr = _num(msg, "snr", "SNR", "snr_db")
+    noise = _num(msg, "noise", "noise_db")
     if rssi is None:
         rssi = LOG_LEVEL.get("rssi")
     if snr is None:
@@ -435,6 +436,14 @@ def apply_level(msg: dict, rec: dict) -> None:
         rec["rssi"] = rssi
     if snr is not None:
         rec["snr"] = snr
+    if noise is not None:
+        rec["noise"] = noise
+    f1 = _num(msg, "freq1")
+    f2 = _num(msg, "freq2")
+    if f1 is not None:
+        rec["freq1"] = f1
+    if f2 is not None:
+        rec["freq2"] = f2
 
 
 def note_log_level(line: str) -> None:
@@ -495,6 +504,30 @@ def handle_rtl_line(line: str) -> dict | None:
     return rec
 
 
+def _fmt_bits(rec: dict) -> str:
+    parts = []
+    if rec.get("snr") is not None:
+        parts.append(f"SNR {rec['snr']}")
+    if rec.get("rssi") is not None:
+        parts.append(f"RSSI {rec['rssi']}")
+    if rec.get("noise") is not None:
+        parts.append(f"noise {rec['noise']}")
+    if rec.get("freq1") is not None or rec.get("freq2") is not None:
+        parts.append(f"f={rec.get('freq1') or '?'}|{rec.get('freq2') or '?'}")
+    if rec.get("src"):
+        parts.append(str(rec["src"]))
+    if rec.get("bit_offset"):
+        parts.append(f"off={rec['bit_offset']}")
+    if rec.get("repaired_bits"):
+        parts.append(f"oprava {len(rec['repaired_bits'])}b")
+    if rec.get("dup"):
+        parts.append("dup")
+    if rec.get("codes") and not rec.get("crc_ok"):
+        raw = str(rec["codes"]).replace("\n", "")
+        parts.append(f"raw={raw[:52]}")
+    return ("  " + "  ".join(parts)) if parts else ""
+
+
 def fmt(rec: dict) -> str:
     t = rec.get("time") or datetime.now().strftime("%H:%M:%S")
     if rec.get("repaired_bits"):
@@ -503,16 +536,44 @@ def fmt(rec: dict) -> str:
         crc = "CRC ok"
     else:
         crc = "CRC fail"
-    snr = rec.get("snr")
-    snr_s = f"  SNR {snr}" if snr is not None else ""
-    label = rec.get("name") or rec.get("code") or rec.get("print") or ""
-    label_s = f"  {label}" if label else ""
+    ident = rec.get("id")
+    printed = rec.get("print") or printed_serial(rec)
+    ids = str(ident)
+    if printed and str(printed) not in ("", str(ident)):
+        ids = f"{ident}  {printed}"
+    name = rec.get("name") or rec.get("code") or ""
+    label = f"  {name}" if name else ""
+    extra = _fmt_bits(rec)
     if rec["model"] == "E-ITN30":
         return (
-            f"{t}  E-ITN {rec['id']}{label_s}  "
-            f"náměr {rec.get('current')}  (loni {rec.get('last_year')})  {rec.get('date')}  {crc}{snr_s}"
+            f"{t}  E-ITN {ids}{label}  "
+            f"náměr {rec.get('current')}  (loni {rec.get('last_year')})  {rec.get('date')}  {crc}{extra}"
         )
-    return f"{t}  E-RM {rec['id']}{label_s}  {rec.get('volume_m3')} m3  {rec.get('date')}  {crc}{snr_s}"
+    return f"{t}  E-RM {ids}{label}  {rec.get('volume_m3')} m3  {rec.get('date')}  {crc}{extra}"
+
+
+def fmt_undecoded(line: str) -> str | None:
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(msg, dict):
+        return None
+    codes = codes_text(msg) or ""
+    snip = codes[:52] + ("…" if len(codes) > 52 else "")
+    rssi = _num(msg, "rssi", "RSSI")
+    snr = _num(msg, "snr", "SNR")
+    t = msg.get("time") or ""
+    model = msg.get("model") or "?"
+    bits = [f"json {model}"]
+    if snip:
+        bits.append(snip)
+    if snr is not None:
+        bits.append(f"SNR {snr}")
+    if rssi is not None:
+        bits.append(f"RSSI {rssi}")
+    bits.append("nešlo dekódovat")
+    return f"{t}  " + "  ".join(bits) if t else "  ".join(bits)
 
 
 def append_log(rec: dict) -> None:
@@ -754,16 +815,18 @@ def already_seen(rec: dict) -> bool:
 
 
 def on_packet(rec: dict) -> None:
+    rec = dict(rec)
     dup = already_seen(rec)
     if dup:
+        rec["dup"] = True
+        print(fmt(rec), flush=True)
         if rec.get("crc_ok") and (rec.get("snr") is not None or rec.get("rssi") is not None):
             update_state(rec)
         return
-    known = int(rec["id"]) in DEVICES
-    if not rec.get("crc_ok") and not known:
-        return
     print(fmt(rec), flush=True)
-    append_log(rec)
+    known = int(rec["id"]) in DEVICES
+    if rec.get("crc_ok") or known:
+        append_log(rec)
     if rec.get("crc_ok"):
         update_state(rec)
         mqtt_send(rec)
@@ -771,7 +834,8 @@ def on_packet(rec: dict) -> None:
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
-        if args and "/api/state" in str(args[0]):
+        req = str(args[0]) if args else ""
+        if any(x in req for x in ("/api/state", "/api/stream", "/health", "GET / HTTP", "GET // HTTP")):
             return
         super().log_message(fmt, *args)
 
@@ -889,7 +953,7 @@ def _mqtt_from_supervisor() -> dict:
 def load_settings() -> dict:
     s = {
         "frequency": os.environ.get("FREQUENCY", "868.95M"),
-        "gain": os.environ.get("GAIN", "40.2"),
+        "gain": os.environ.get("GAIN", "19.2"),
         "sample_rate": os.environ.get("SAMPLE_RATE", "1024k"),
         "web_port": int(os.environ.get("WEB_PORT", "8099")),
         "mqtt_host": os.environ.get("MQTT_HOST", ""),
@@ -910,16 +974,24 @@ def load_settings() -> dict:
     return s
 
 
+def rtl_gain() -> str:
+    g = SETTINGS.get("gain")
+    if g is None or g == "":
+        return "19.2"
+    return str(g)
+
+
 def rtl_cmd() -> list[str]:
     cmd = [
         "rtl_433",
         "-d", "0",
         "-f", str(SETTINGS.get("frequency") or "868.95M"),
         "-s", str(SETTINGS.get("sample_rate") or "1024k"),
-        "-g", str(SETTINGS.get("gain") or "40.2"),
+        "-g", rtl_gain(),
         "-Y", "minmax",
         "-Y", "autolevel",
         "-M", "level",
+        "-M", "noise",
         "-R", "0",
         "-R", "277",
         "-X", "n=Apator,m=FSK_PCM,s=25,l=25,r=5000,preamble=aaaa699a",
@@ -1007,6 +1079,24 @@ def self_check() -> None:
     assert tagged["snr"] == 21.5 and tagged["rssi"] == -18.2
     LOG_LEVEL.clear()
     STATE.pop(1, None)
+    line = fmt(
+        {
+            "model": "E-RM30",
+            "id": 704488422,
+            "print": "301835238",
+            "name": "Teplá",
+            "volume_m3": 90.235,
+            "date": "2026-09-16",
+            "crc_ok": False,
+            "snr": 38.4,
+            "rssi": -1.2,
+            "src": "flex",
+            "codes": "{161}ee6d",
+        }
+    )
+    assert "RSSI -1.2" in line and "CRC fail" in line and "flex" in line and "301835238" in line, line
+    miss = fmt_undecoded('{"time":"t","model":"Apator","codes":["{10}abcd"],"rssi":-9}')
+    assert miss and "nešlo dekódovat" in miss and "abcd" in miss, miss
     print("self-check ok", flush=True)
 
 
@@ -1040,19 +1130,17 @@ def listen() -> int:
                     try:
                         rec = handle_rtl_line(line)
                     except Exception as e:
-                        print(f"skip: {e}", flush=True)
+                        print(f"skip: {e}  {line.strip()[:160]}", flush=True)
                         continue
                     if rec:
                         seen += 1
                         on_packet(rec)
-                    elif line.strip() and not line.lstrip().startswith("{"):
-                        msg = line.rstrip()
-                        print(msg, flush=True)
-                        if "FC0012" in msg:
-                            print(
-                                "tuner je FC0012 (I2C), ne R828D — zisk max 19.2, 40.2 se ignoruje",
-                                flush=True,
-                            )
+                    elif line.lstrip().startswith("{"):
+                        miss = fmt_undecoded(line)
+                        if miss:
+                            print(miss, flush=True)
+                    elif line.strip():
+                        print(line.rstrip(), flush=True)
             finally:
                 if proc.poll() is None:
                     proc.terminate()
@@ -1082,7 +1170,17 @@ def main(argv: list[str]) -> int:
     self_check()
     load_latest()
     start_http()
-    print(f"měřáků v konfiguraci: {len(DEVICES)}", flush=True)
+    print(
+        f"měřáků v konfiguraci: {len(DEVICES)}  gain={rtl_gain()}  "
+        f"{SETTINGS.get('frequency')}  {SETTINGS.get('sample_rate')}",
+        flush=True,
+    )
+    for ident, meta in DEVICES.items():
+        print(
+            f"  {meta.get('print') or ident}  {meta.get('model')}  "
+            f"{meta.get('name') or '-'}  id {ident}",
+            flush=True,
+        )
     if SETTINGS.get("mqtt_host"):
         print(f"mqtt {SETTINGS['mqtt_host']}:{SETTINGS['mqtt_port']}", flush=True)
         threading.Thread(target=mqtt_keepalive_loop, daemon=True).start()

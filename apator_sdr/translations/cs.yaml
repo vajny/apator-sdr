@@ -4,7 +4,7 @@ configuration:
     description: Střed RTL-SDR. Apator Metra vysílá na 868.95M.
   gain:
     name: Zisk tuneru
-    description: R828D / RTL-SDR V4: začni na 40.2, max ~49.6. 19.2 je strop jen u FC0012.
+    description: Zisk RTL-SDR pro rtl_433 (-g).
   sample_rate:
     name: Vzorkování
   devices:

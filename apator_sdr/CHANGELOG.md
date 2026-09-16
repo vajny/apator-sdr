@@ -4,6 +4,13 @@ Všechny podstatné změny v Apator SDR. Formát [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-17
+
+### Changed
+
+- Log je podrobnější: RSSI, noise, FSK kmitočty, native/flex, potisk, CRC fail i u cizích ID, nedešifrovaný JSON, duplikáty native+flex.
+- Na startu vypíše zisk a mapování sériovka → on-air ID.
+
 ## [0.1.6] - 2026-09-16
 
 ### Fixed
