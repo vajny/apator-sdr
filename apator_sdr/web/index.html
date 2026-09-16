@@ -58,6 +58,19 @@
     .empty { color: var(--dim); padding: 2rem 1.5rem; }
     .dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-right: 0.4rem; background: var(--ok); }
     .dot.bad { background: var(--bad); }
+    .sig {
+      display: inline-block;
+      vertical-align: middle;
+      width: 5.5rem;
+      height: 0.45rem;
+      background: var(--line);
+      border-radius: 4px;
+      margin-right: 0.5rem;
+      overflow: hidden;
+    }
+    .sig > i { display: block; height: 100%; background: var(--ok); }
+    .sig.mid > i { background: var(--heat); }
+    .sig.weak > i { background: var(--bad); }
   </style>
 </head>
 <body>
@@ -75,6 +88,19 @@
     function fmtTime(t) {
       if (!t) return "—";
       try { return new Date(t).toLocaleString("cs-CZ"); } catch { return t; }
+    }
+
+    function signalRow(d) {
+      if (d.snr == null && d.rssi == null) return `<dt>Signál</dt><dd>—</dd>`;
+      const snr = d.snr == null ? null : Number(d.snr);
+      const rssi = d.rssi == null ? null : Number(d.rssi);
+      const pct = snr == null ? 0 : Math.max(0, Math.min(100, (snr / 40) * 100));
+      const cls = snr == null ? "" : snr >= 25 ? "" : snr >= 18 ? "mid" : "weak";
+      const nums = [
+        snr != null ? `SNR ${snr.toFixed(1)} dB` : null,
+        rssi != null ? `RSSI ${rssi.toFixed(1)} dB` : null,
+      ].filter(Boolean).join(" · ");
+      return `<dt>Signál</dt><dd><span class="sig ${cls}"><i style="width:${pct}%"></i></span>${nums}</dd>`;
     }
 
     function render(state) {
@@ -107,7 +133,8 @@
             ${d.code ? `<dt>Kód</dt><dd>${d.code}</dd>` : ""}
             <dt>Datum v paketu</dt><dd>${d.date || "—"}</dd>
             <dt>Slyšeno</dt><dd>${d.crc_ok == null ? "zatím ne" : fmtTime(d.time || d.heard)}</dd>
-            <dt>Rádio</dt><dd><span class="dot ${d.crc_ok === true ? "" : "bad"}"></span>CRC ${crc}${d.snr != null ? " · SNR " + Number(d.snr).toFixed(1) + " dB" : ""}</dd>
+            ${signalRow(d)}
+            <dt>Rádio</dt><dd><span class="dot ${d.crc_ok === true ? "" : "bad"}"></span>CRC ${crc}</dd>
           </dl>
         </article>`;
       }).join("");

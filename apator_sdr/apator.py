@@ -498,10 +498,11 @@ def mqtt_connect() -> socket.socket | None:
         if password:
             flags |= 0x40
             payload += _mqtt_str(password)
-    vh = b"\x00\x04MQTT\x04" + bytes([flags, 0x00, 0x3C])
+    vh = b"\x00\x04MQTT\x04" + bytes([flags]) + (180).to_bytes(2, "big")
     rem = vh + payload
     pkt = bytes([0x10]) + _mqtt_len(len(rem)) + rem
     sock = socket.create_connection((host, port), 5)
+    sock.settimeout(5)
     sock.sendall(pkt)
     resp = sock.recv(4)
     if not resp or resp[0] != 0x20 or (len(resp) > 3 and resp[3] != 0):
@@ -510,28 +511,53 @@ def mqtt_connect() -> socket.socket | None:
     return sock
 
 
-def mqtt_publish(topic: str, payload: str, retain: bool = True) -> None:
+def _mqtt_drop(err: BaseException | None = None) -> None:
+    global MQTT_SOCK
+    if err is not None:
+        print(f"mqtt: {err}", flush=True)
+    try:
+        if MQTT_SOCK:
+            MQTT_SOCK.close()
+    except OSError:
+        pass
+    MQTT_SOCK = None
+
+
+def mqtt_publish(topic: str, payload: str, retain: bool = True) -> bool:
     global MQTT_SOCK
     if not SETTINGS.get("mqtt_host"):
-        return
+        return False
     body = _mqtt_str(topic) + payload.encode()
     header = 0x30 | (1 if retain else 0)
     pkt = bytes([header]) + _mqtt_len(len(body)) + body
     with MQTT_LOCK:
-        try:
-            if MQTT_SOCK is None:
-                MQTT_SOCK = mqtt_connect()
-            if MQTT_SOCK is None:
-                return
-            MQTT_SOCK.sendall(pkt)
-        except OSError as e:
-            print(f"mqtt: {e}", flush=True)
+        for _ in range(2):
             try:
-                if MQTT_SOCK:
-                    MQTT_SOCK.close()
-            except OSError:
-                pass
-            MQTT_SOCK = None
+                if MQTT_SOCK is None:
+                    MQTT_SOCK = mqtt_connect()
+                if MQTT_SOCK is None:
+                    return False
+                MQTT_SOCK.sendall(pkt)
+                return True
+            except OSError as e:
+                _mqtt_drop(e)
+        return False
+
+
+def mqtt_keepalive_loop() -> None:
+    global MQTT_SOCK
+    while True:
+        time.sleep(45)
+        if not SETTINGS.get("mqtt_host"):
+            continue
+        with MQTT_LOCK:
+            try:
+                if MQTT_SOCK is None:
+                    MQTT_SOCK = mqtt_connect()
+                    continue
+                MQTT_SOCK.sendall(b"\xc0\x00")
+            except OSError as e:
+                _mqtt_drop(e)
 
 
 def ha_announce(rec: dict) -> None:
@@ -571,7 +597,8 @@ def ha_announce(rec: dict) -> None:
             cfg["unit_of_measurement"] = unit
         if devclass:
             cfg["device_class"] = devclass
-        mqtt_publish(f"homeassistant/sensor/apator_{ident}_{key}/config", json.dumps(cfg), True)
+        if not mqtt_publish(f"homeassistant/sensor/apator_{ident}_{key}/config", json.dumps(cfg), True):
+            return
     HA_ANNOUNCED.add(ident)
 
 
@@ -599,7 +626,7 @@ def on_packet(rec: dict) -> None:
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
-        if args and str(args[0]).startswith("GET /api/state"):
+        if args and "/api/state" in str(args[0]):
             return
         super().log_message(fmt, *args)
 
@@ -613,7 +640,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        path = self.path.split("?", 1)[0]
+        path = "/" + "/".join(p for p in self.path.split("?", 1)[0].split("/") if p)
         if path in ("/", "/index.html"):
             html = (HERE / "web" / "index.html").read_bytes()
             self.send_response(200)
@@ -691,7 +718,7 @@ def _mqtt_from_supervisor() -> dict:
 def load_settings() -> dict:
     s = {
         "frequency": os.environ.get("FREQUENCY", "868.95M"),
-        "gain": os.environ.get("GAIN", "19.2"),
+        "gain": os.environ.get("GAIN", "40.2"),
         "sample_rate": os.environ.get("SAMPLE_RATE", "1024k"),
         "web_port": int(os.environ.get("WEB_PORT", "8099")),
         "mqtt_host": os.environ.get("MQTT_HOST", ""),
@@ -713,13 +740,13 @@ def load_settings() -> dict:
 
 
 def rtl_cmd() -> list[str]:
-    # Debian bookworm v addonu má staré rtl_433: -R 277 a spousta -Y ho hned zabije.
     cmd = [
         "rtl_433",
         "-d", "0",
         "-f", str(SETTINGS.get("frequency") or "868.95M"),
         "-s", str(SETTINGS.get("sample_rate") or "1024k"),
-        "-g", str(SETTINGS.get("gain") or "19.2"),
+        "-g", str(SETTINGS.get("gain") or "40.2"),
+        "-M", "level",
         "-X", "n=Apator,m=FSK_PCM,s=25,l=25,r=5000,preamble=aaaa699a",
         "-F", "json",
     ]
@@ -851,6 +878,7 @@ def main(argv: list[str]) -> int:
     print(f"měřáků v konfiguraci: {len(DEVICES)}", flush=True)
     if SETTINGS.get("mqtt_host"):
         print(f"mqtt {SETTINGS['mqtt_host']}:{SETTINGS['mqtt_port']}", flush=True)
+        threading.Thread(target=mqtt_keepalive_loop, daemon=True).start()
         for rec in list(STATE.values()):
             mqtt_send(rec)
     else:

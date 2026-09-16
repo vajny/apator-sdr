@@ -4,7 +4,7 @@ configuration:
     description: RTL-SDR center frequency (Apator Metra uses 868.95M).
   gain:
     name: Tuner gain
-    description: FC0012 max is 19.2. Leave it unless you know the stick.
+    description: R828D / RTL-SDR V4 starts at 40.2 (max ~49.6). 19.2 is only the FC0012 cap.
   sample_rate:
     name: Sample rate
   devices:

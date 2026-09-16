@@ -24,10 +24,12 @@ Zastrč dongle do Pi. Na Pi 4 radši **USB 2** port (černý), USB 3 umí dělat
 1. Settings → Add-ons → Add-on store → ⋮ vpravo nahoře → **Repositories**.
 2. Vlož `https://github.com/vajny/apator-sdr` → Add.
 3. Obnov store, nainstaluj **Apator SDR**.
-4. **Configuration** → pod *Měřáky* přidej řádky: sériové číslo, jméno, `E-ITN30` (topení) nebo `E-RM30` (voda). Save.
-5. Zapni **Start on boot**, **Watchdog**, **Show in sidebar** → Start.
+4. **Configuration** → pod *Měřáky* přidej řádky: sériové číslo, jméno, `E-ITN30` (topení) nebo `E-RM30` (voda). Zisk u R828D nech **40.2**. Save.
+5. Zapni **Start on boot**, **Watchdog**, **Show in sidebar** → Start. První stavba image na Pi 4 chvíli trvá (kompiluje V4 driver).
 
 V liště je panel **Apator**. Neslyšené / cizí měřáky se ukážou na webu (ať víš, co opsat), MQTT entity jen pro zadané sériovky. První čistý telegram bývá do ~4 min.
+
+V logu má být `Found Rafael Micro R828D tuner` a `Tuner gain set to 40.2`. Když pořád vidíš `Fitipower FC0012` a `19.2 dB`, image se nestavěla znovu — Rebuild.
 
 ### Když dongle nevidí
 
@@ -37,7 +39,7 @@ V logu hledej `usb_claim`, `No supported devices` nebo `rtl_433 skončil`. Zkus:
 - v addonu vypnout **Protection mode**
 - Settings → System → Hardware, že `rtl2838` / `usb` tam je
 
-Tuner **FC0012** má slabší zisk; CRC občas opravíme podle zadaného sériového čísla.
+CRC občas opravíme podle zadaného sériového čísla.
 
 ## Lokálně (bez HA)
 
