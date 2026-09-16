@@ -1,0 +1,7 @@
+readings.jsonl
+rtl.jsonl
+options.json
+*.cu8
+__pycache__/
+.DS_Store
+

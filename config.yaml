@@ -1,0 +1,36 @@
+name: Apator SDR
+version: "0.1.0"
+slug: apator_sdr
+description: Odečet Apator Metra E-ITN 30.2 (teplo) a E-RM 30 (vodoměr) přes RTL-SDR na 868.95 MHz
+url: https://github.com/merbanan/rtl_433
+arch:
+  - aarch64
+  - amd64
+  - armv7
+usb: true
+udev: true
+init: false
+startup: services
+hassio_api: true
+hassio_role: default
+services:
+  - mqtt:want
+ingress: true
+ingress_port: 8099
+ingress_entry: /
+panel_icon: mdi:radiator
+panel_title: Apator
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: Web (když nepoužiješ ingress)
+options:
+  frequency: "868.95M"
+  gain: "19.2"
+  sample_rate: "1024k"
+schema:
+  frequency: str
+  gain: str
+  sample_rate: str
+map:
+  - addon_config:rw

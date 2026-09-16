@@ -1,0 +1,17 @@
+services:
+  apator:
+    build: .
+    container_name: apator-sdr
+    restart: unless-stopped
+    devices:
+      - /dev/bus/usb
+    ports:
+      - "8099:8099"
+    environment:
+      WEB_PORT: "8099"
+      MQTT_HOST: "${MQTT_HOST:-}"
+      MQTT_PORT: "${MQTT_PORT:-1883}"
+      MQTT_USER: "${MQTT_USER:-}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:-}"
+    volumes:
+      - ./devices.json:/opt/apator/devices.json:ro

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Apator SDR</title>
+  <style>
+    :root {
+      --bg: #12110f;
+      --card: #1c1b18;
+      --ink: #f0ece4;
+      --dim: #9a9488;
+      --line: #2e2c28;
+      --heat: #e8a87c;
+      --water: #7eb8c9;
+      --ok: #8fbf88;
+      --bad: #d98980;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px/1.4 "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    header {
+      padding: 1.25rem 1.5rem 0.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+    header h1 { font-size: 1.15rem; font-weight: 600; margin: 0; }
+    header p { margin: 0.25rem 0 1rem; color: var(--dim); font-size: 0.9rem; }
+    main {
+      display: grid;
+      gap: 1rem;
+      padding: 1rem 1.5rem 2rem;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.1rem 1.2rem 1.2rem;
+    }
+    .card .kind { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+    .card.heat .kind { color: var(--heat); }
+    .card.water .kind { color: var(--water); }
+    .card h2 { margin: 0.2rem 0 0.8rem; font-size: 1.05rem; font-weight: 600; }
+    .value {
+      font-variant-numeric: tabular-nums;
+      font-size: 2.4rem;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+    .unit { font-size: 1rem; color: var(--dim); margin-left: 0.2rem; }
+    dl { margin: 0.9rem 0 0; display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.8rem; color: var(--dim); font-size: 0.9rem; }
+    dt { opacity: 0.8; }
+    dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .empty { color: var(--dim); padding: 2rem 1.5rem; }
+    .dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-right: 0.4rem; background: var(--ok); }
+    .dot.bad { background: var(--bad); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Apator SDR</h1>
+    <p id="status">Načítám…</p>
+  </header>
+  <main id="cards"></main>
+  <p class="empty" id="empty" hidden>Zatím žádný čistý telegram. E-ITN i E-RM vysílají na 868.95 MHz zhruba každé 4 minuty.</p>
+  <script>
+    const cards = document.getElementById("cards");
+    const empty = document.getElementById("empty");
+    const status = document.getElementById("status");
+
+    function fmtTime(t) {
+      if (!t) return "—";
+      try { return new Date(t).toLocaleString("cs-CZ"); } catch { return t; }
+    }
+
+    function render(state) {
+      const devices = Object.values(state.devices || {});
+      status.textContent = devices.length
+        ? `Poslední aktualizace ${fmtTime(state.updated)} · ${devices.length} zařízení`
+        : "Čekám na první telegram";
+      empty.hidden = devices.length > 0;
+      cards.innerHTML = devices.map((d) => {
+        const heat = d.model === "E-ITN30";
+        const title = d.name || d.code || d.print || d.id;
+        const main = heat
+          ? `${d.current ?? "—"}<span class="unit">jedn.</span>`
+          : `${d.volume_m3 ?? "—"}<span class="unit">m³</span>`;
+        const extra = heat
+          ? `<dt>Loni</dt><dd>${d.last_year ?? "—"}</dd>`
+          : `<dt>Objem</dt><dd>${d.volume_m3 ?? "—"} m³</dd>`;
+        const crc = d.crc_ok ? "ok" : "fail";
+        return `<article class="card ${heat ? "heat" : "water"}">
+          <div class="kind">${heat ? "E-ITN 30.2" : "E-RM 30"}</div>
+          <h2>${title}</h2>
+          <div class="value">${main}</div>
+          <dl>
+            ${extra}
+            <dt>Sériové č.</dt><dd>${d.id}${d.print ? " · " + d.print : ""}</dd>
+            ${d.code ? `<dt>Kód</dt><dd>${d.code}</dd>` : ""}
+            <dt>Datum v paketu</dt><dd>${d.date || "—"}</dd>
+            <dt>Slyšeno</dt><dd>${fmtTime(d.time || d.heard)}</dd>
+            <dt>Rádio</dt><dd><span class="dot ${d.crc_ok ? "" : "bad"}"></span>CRC ${crc}${d.snr != null ? " · SNR " + Number(d.snr).toFixed(1) + " dB" : ""}</dd>
+          </dl>
+        </article>`;
+      }).join("");
+    }
+
+    async function poll() {
+      const r = await fetch("api/state");
+      if (!r.ok) throw new Error(r.status);
+      render(await r.json());
+    }
+
+    poll().catch((e) => { status.textContent = "Web běží, ale API neodpovídá: " + e; });
+    setInterval(() => poll().catch(() => {}), 3000);
+    try {
+      const es = new EventSource("api/stream");
+      es.onmessage = (ev) => {
+        try { poll(); } catch {}
+      };
+    } catch {}
+  </script>
+</body>
+</html>
