@@ -2,7 +2,7 @@
 
 Odečet **Apator Metra E-ITN 30.2** (indikátor tepla) a **E-RM 30** (rádiový modul vodoměru) z RTL-SDR na **868.95 MHz**.
 
-Měřáky se zadávají v konfiguraci addonu (sériové číslo z potisku). U E-RM se potisk liší od ID ve vzduchu o `XOR 0x38000000`; stačí napsat číslo z krabičky.
+Měřáky se zadávají v konfiguraci addonu (sériové číslo z potisku). U E-RM se potisk liší od ID ve vzduchu o `XOR 0x38000000`; stačí napsat číslo z krabičky. Historie verzí: [CHANGELOG.md](CHANGELOG.md).
 
 ## Home Assistant OS (Raspberry Pi)
 
