@@ -4,6 +4,13 @@ Všechny podstatné změny v Apator SDR. Formát [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-09-17
+
+### Changed
+
+- Výchozí rádio pro byt u stupaček: zisk **17.9 dB**, vzorkování **250k**, plus magest/squelch. Méně přebuzení a cizího 868 MHz.
+- Na kartě Prostředí je CRC fail zvlášť **moje / cizí**.
+
 ## [0.1.11] - 2026-09-17
 
 ### Changed

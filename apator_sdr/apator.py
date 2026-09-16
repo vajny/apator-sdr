@@ -193,8 +193,8 @@ def persist_devices() -> None:
     body = json.dumps({
         "options": {
             "frequency": _opt(opts, "frequency", SETTINGS.get("frequency") or "868.95M"),
-            "gain": _opt(opts, "gain", SETTINGS.get("gain") or "19.2"),
-            "sample_rate": _opt(opts, "sample_rate", SETTINGS.get("sample_rate") or "1024k"),
+            "gain": _opt(opts, "gain", SETTINGS.get("gain") or "17.9"),
+            "sample_rate": _opt(opts, "sample_rate", SETTINGS.get("sample_rate") or "250k"),
             "devices": devices_as_options(),
         }
     }).encode()
@@ -520,15 +520,23 @@ def radio_snapshot() -> dict:
     while EVENTS and now - EVENTS[0][0] > WINDOW_S:
         EVENTS.popleft()
     ok = fail = junk = 0
+    ok_mine = fail_mine = fail_other = 0
     ids: set[int] = set()
     snrs: list[float] = []
     for _ts, kind, ident, snr in EVENTS:
+        mine = ident is not None and ident in DEVICES
         if kind == "ok":
             ok += 1
+            if mine:
+                ok_mine += 1
             if ident is not None:
                 ids.add(ident)
         elif kind == "fail":
             fail += 1
+            if mine:
+                fail_mine += 1
+            else:
+                fail_other += 1
         else:
             junk += 1
         if snr is not None:
@@ -561,6 +569,9 @@ def radio_snapshot() -> dict:
         "ppm": ppm,
         "crc_ok": ok,
         "crc_fail": fail,
+        "ok_mine": ok_mine,
+        "fail_mine": fail_mine,
+        "fail_other": fail_other,
         "undecoded": junk,
         "fail_pct": fail_pct,
         "unique": len(ids),
@@ -921,6 +932,8 @@ def ha_announce_radio() -> None:
         ("zisk", "Zisk tuneru", "{{ value_json.gain_db }}", "dB", "mdi:volume-equal"),
         ("zisk_config", "Zisk z konfigurace", "{{ value_json.gain_asked }}", "dB", "mdi:cog"),
         ("crc_fail", "CRC fail", "{{ value_json.fail_pct }}", "%", "mdi:alert"),
+        ("crc_moje", "CRC fail moje", "{{ value_json.fail_mine }}", None, "mdi:home"),
+        ("crc_cizi", "CRC fail cizí", "{{ value_json.fail_other }}", None, "mdi:account-group"),
         ("slyseno", "Slyšených ID", "{{ value_json.unique }}", None, "mdi:access-point"),
         ("telegramy", "Telegramy/min", "{{ value_json.ppm }}", "1/min", "mdi:pulse"),
         ("pasmo", "Pásmo 868", "{{ value_json.band }}", None, "mdi:radio-tower"),
@@ -1130,8 +1143,8 @@ def _mqtt_from_supervisor() -> dict:
 def load_settings() -> dict:
     s = {
         "frequency": os.environ.get("FREQUENCY", "868.95M"),
-        "gain": os.environ.get("GAIN", "19.2"),
-        "sample_rate": os.environ.get("SAMPLE_RATE", "1024k"),
+        "gain": os.environ.get("GAIN", "17.9"),
+        "sample_rate": os.environ.get("SAMPLE_RATE", "250k"),
         "web_port": int(os.environ.get("WEB_PORT", "8099")),
         "mqtt_host": os.environ.get("MQTT_HOST", ""),
         "mqtt_port": int(os.environ.get("MQTT_PORT", "1883")),
@@ -1179,7 +1192,7 @@ def merge_radio_options(s: dict) -> None:
 def rtl_gain() -> str:
     g = SETTINGS.get("gain")
     if g is None or g == "":
-        return "19.2"
+        return "17.9"
     return str(g).strip()
 
 
@@ -1209,9 +1222,11 @@ def rtl_cmd() -> list[str]:
         "-d", "0",
         "-v",
         "-f", str(SETTINGS.get("frequency") or "868.95M"),
-        "-s", str(SETTINGS.get("sample_rate") or "1024k"),
+        "-s", str(SETTINGS.get("sample_rate") or "250k"),
         "-Y", "minmax",
         "-Y", "autolevel",
+        "-Y", "magest",
+        "-Y", "squelch",
         "-M", "level",
         "-M", "noise",
         "-R", "0",
@@ -1336,6 +1351,8 @@ def self_check() -> None:
         SETTINGS.pop("gain", None)
     else:
         SETTINGS["gain"] = prev_g
+    cmd = " ".join(rtl_cmd())
+    assert "-Y magest" in cmd and "-Y squelch" in cmd, cmd
     EVENTS.clear()
     RADIO.clear()
     note_log_level("Auto Level: Current noise level -15.5 dB, estimated noise -15.4 dB")
@@ -1343,12 +1360,22 @@ def self_check() -> None:
     note_log_level("Auto Level: Estimated noise level is -38.7 dB, adjusting minimum detection level to -35.7 dB")
     assert RADIO.get("noise") == -38.7 and RADIO.get("threshold") == -35.7
     EVENTS.clear()
+    prev_dev = dict(DEVICES)
+    DEVICES.clear()
+    DEVICES[704488422] = {"model": "E-RM30", "name": "Teplá"}
     radio_hit("ok", 704488422, 30.0)
     st = radio_snapshot()
     assert st["crc_ok"] == 1 and st["band"] == "klidné" and st["unique"] == 1
+    assert st["ok_mine"] == 1 and st["fail_mine"] == 0
+    radio_hit("fail", 704488422, 38.0)
+    radio_hit("fail", 9, 12.0)
+    st = radio_snapshot()
+    assert st["fail_mine"] == 1 and st["fail_other"] == 1
     RADIO["noise"] = -15.0
     assert radio_snapshot()["band"] == "přebuzené"
     assert "radio" in snapshot()
+    DEVICES.clear()
+    DEVICES.update(prev_dev)
     EVENTS.clear()
     RADIO.clear()
     print("self-check ok", flush=True)
@@ -1375,8 +1402,11 @@ def listen() -> int:
                 print(f"aktivní zisk: žádám {got} dB  (0 u rtl_433 je Auto, proto minimum)", flush=True)
             else:
                 print(f"aktivní zisk: žádám {got} dB", flush=True)
-            print("poslouchám", SETTINGS.get("frequency"), flush=True)
+            print("poslouchám", SETTINGS.get("frequency"), SETTINGS.get("sample_rate"), flush=True)
             print(" ", " ".join(cmd), flush=True)
+            sr = str(SETTINGS.get("sample_rate") or "")
+            if str(asked) == "19.2" or "1024" in sr:
+                print("tip: u stupaček 17.9 dB + 250k (19.2/1024k přebíjí vodu a tahá cizí 868)", flush=True)
             try:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
