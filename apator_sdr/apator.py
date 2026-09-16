@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import socket
 import subprocess
 import sys
@@ -49,15 +50,88 @@ def on_air_id(raw_id: int, meta: dict) -> int:
     return raw_id
 
 
+def parse_serial(text) -> int | None:
+    s = str(text or "").strip().replace(" ", "")
+    if not s:
+        return None
+    if "/" in s:
+        s = s.split("/", 1)[0]
+    if not s.isdigit():
+        return None
+    return int(s, 10)
+
+
+def _model_of(item: dict) -> str:
+    raw = str(item.get("model") or item.get("kind") or item.get("type") or "")
+    return {
+        "topení": "E-ITN30",
+        "topeni": "E-ITN30",
+        "vodoměr": "E-RM30",
+        "vodomer": "E-RM30",
+        "itn": "E-ITN30",
+        "erm": "E-RM30",
+        "E-ITN 30.2": "E-ITN30",
+        "E-RM 30": "E-RM30",
+        "E-ITN30": "E-ITN30",
+        "E-RM30": "E-RM30",
+    }.get(raw, "E-ITN30" if raw not in ("E-RM30",) else raw)
+
+
+def meta_from_row(serial: int, item: dict) -> dict:
+    model = _model_of(item)
+    name = str(item.get("name") or "").strip() or str(serial)
+    print_s = str(item.get("print") or item.get("serial") or serial).strip()
+    return {"model": model, "name": name, "print": print_s}
+
+
+def printed_serial(rec: dict) -> str:
+    if rec.get("print"):
+        return str(rec["print"])
+    ident = rec.get("id")
+    if ident is None:
+        return ""
+    ident = int(ident)
+    if rec.get("model") == "E-RM30" and ident >= 0x20000000:
+        return str(ident ^ 0x38000000)
+    return str(ident)
+
+
 def load_devices() -> None:
     DEVICES.clear()
-    paths = [HERE / "devices.json", Path("/data/devices.json"), Path("/config/devices.json")]
     merged: dict[str, dict] = {}
-    for p in paths:
-        if p.exists():
-            merged.update(json.loads(p.read_text(encoding="utf-8")))
+    opts = Path("/data/options.json")
+    ha_list = None
+    if opts.exists():
+        try:
+            raw = json.loads(opts.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            raw = {}
+        if isinstance(raw, dict) and isinstance(raw.get("devices"), list):
+            ha_list = raw["devices"]
+    if ha_list is not None:
+        for item in ha_list:
+            if not isinstance(item, dict):
+                continue
+            serial = parse_serial(item.get("serial") or item.get("id") or "")
+            if serial is None:
+                continue
+            merged[str(serial)] = meta_from_row(serial, item)
+    else:
+        for p in (HERE / "devices.json", Path("/data/devices.json"), Path("/config/devices.json")):
+            if not p.exists():
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                merged.update(data)
     for k, v in merged.items():
-        DEVICES[on_air_id(int(k), v)] = v
+        serial = parse_serial(k)
+        if serial is None or not isinstance(v, dict):
+            continue
+        meta = meta_from_row(serial, v)
+        DEVICES[on_air_id(serial, meta)] = meta
 
 
 def crc16(data: bytes, poly: int = 0x8005, init: int = 0xFFFF) -> int:
@@ -161,6 +235,10 @@ def annotate(rec: dict) -> dict:
         rec["code"] = info.get("code")
         rec["print"] = info.get("print")
         rec["name"] = info.get("name")
+        rec["configured"] = True
+    else:
+        rec["configured"] = False
+        rec.setdefault("print", printed_serial(rec))
     return rec
 
 
@@ -352,24 +430,27 @@ def load_latest() -> None:
 
 def snapshot() -> dict:
     with STATE_LOCK:
-        if DEVICES:
-            devices = {}
-            for ident, meta in DEVICES.items():
-                rec = STATE.get(ident)
-                if rec:
-                    devices[str(ident)] = rec
-                else:
-                    devices[str(ident)] = annotate(
-                        {"id": ident, "model": meta.get("model"), "crc_ok": None}
-                    )
-        else:
-            devices = {str(k): v for k, v in STATE.items()}
+        devices = {}
+        for ident, meta in DEVICES.items():
+            rec = STATE.get(ident)
+            if rec:
+                devices[str(ident)] = rec
+            else:
+                devices[str(ident)] = annotate(
+                    {"id": ident, "model": meta.get("model"), "crc_ok": None}
+                )
+        for ident, rec in STATE.items():
+            if str(ident) not in devices:
+                extra = dict(rec)
+                extra["configured"] = False
+                extra.setdefault("print", printed_serial(extra))
+                devices[str(ident)] = extra
     updated = None
     for rec in devices.values():
         t = rec.get("time") or rec.get("heard")
         if t and (updated is None or t > updated):
             updated = t
-    return {"updated": updated, "devices": devices}
+    return {"updated": updated, "devices": devices, "configured": len(DEVICES)}
 
 
 def update_state(rec: dict) -> None:
@@ -497,6 +578,8 @@ def ha_announce(rec: dict) -> None:
 def mqtt_send(rec: dict) -> None:
     if not rec.get("crc_ok"):
         return
+    if int(rec["id"]) not in DEVICES:
+        return
     ha_announce(rec)
     slim = {
         k: rec.get(k)
@@ -620,8 +703,9 @@ def load_settings() -> dict:
         if p.exists():
             raw = json.loads(p.read_text(encoding="utf-8"))
             for k, v in raw.items():
-                if v not in (None, ""):
-                    s[k] = v
+                if k == "devices" or v in (None, ""):
+                    continue
+                s[k] = v
     sup = _mqtt_from_supervisor()
     if not s.get("mqtt_host") and sup.get("mqtt_host"):
         s.update(sup)
@@ -629,25 +713,22 @@ def load_settings() -> dict:
 
 
 def rtl_cmd() -> list[str]:
-    return [
+    # Debian bookworm v addonu má staré rtl_433: -R 277 a spousta -Y ho hned zabije.
+    cmd = [
         "rtl_433",
         "-d", "0",
         "-f", str(SETTINGS.get("frequency") or "868.95M"),
         "-s", str(SETTINGS.get("sample_rate") or "1024k"),
         "-g", str(SETTINGS.get("gain") or "19.2"),
-        "-Y", "minmax",
-        "-Y", "autolevel",
-        "-Y", "minsnr=10",
-        "-R", "277",
         "-X", "n=Apator,m=FSK_PCM,s=25,l=25,r=5000,preamble=aaaa699a",
-        "-M", "level",
-        "-M", "time:iso",
         "-F", "json",
     ]
+    if shutil.which("stdbuf"):
+        cmd = ["stdbuf", "-oL", *cmd]
+    return cmd
 
 
 def self_check() -> None:
-    load_devices()
     heat = {
         "model": "E-ITN30",
         "id": 31975929,
@@ -673,21 +754,31 @@ def self_check() -> None:
     sample = bytes.fromhex("eec25edb8e003d1584cadf3678f930c1f7bdc6ec")
     pub = decode_frame(sample)
     assert pub and pub["id"] == 31975929 and pub["current"] == 517 and pub["last_year"] == 2605, pub
-    mine = encode_frame(model="E-ITN30", id=30731042, current=263, last_year=258, date="2026-09-16")
-    broken = bytearray(mine)
-    broken[13 // 8] ^= 1 << (7 - (13 % 8))
-    broken[41 // 8] ^= 1 << (7 - (41 % 8))
-    fixed = repair_known(bytes(broken))
-    assert fixed and fixed["id"] == 30731042 and fixed["crc_ok"], fixed
-    live = bytes.fromhex("ee6d56cd8ecd3fca2aa752387cf738c8f0bdf60f")
-    live_fix = repair_known(live)
-    assert live_fix and live_fix["id"] == 30731042 and live_fix["date"] == "2026-09-16", live_fix
-    json_line = (
-        '{"time":"2026-09-16T17:43:55","model":"Apator","codes":'
-        '["{158}ee6956cd8ef13cbc87b15e0577f7380561bd4bd8"],"rssi":-11.4,"snr":30.8}'
-    )
-    from_json = handle_rtl_line(json_line)
-    assert from_json and from_json["id"] == 30731042, from_json
+    prev = dict(DEVICES)
+    DEVICES.clear()
+    DEVICES[30731042] = {"model": "E-ITN30", "name": "check"}
+    try:
+        mine = encode_frame(model="E-ITN30", id=30731042, current=263, last_year=258, date="2026-09-16")
+        broken = bytearray(mine)
+        broken[13 // 8] ^= 1 << (7 - (13 % 8))
+        broken[41 // 8] ^= 1 << (7 - (41 % 8))
+        fixed = repair_known(bytes(broken))
+        assert fixed and fixed["id"] == 30731042 and fixed["crc_ok"], fixed
+        live = bytes.fromhex("ee6d56cd8ecd3fca2aa752387cf738c8f0bdf60f")
+        live_fix = repair_known(live)
+        assert live_fix and live_fix["id"] == 30731042 and live_fix["date"] == "2026-09-16", live_fix
+        json_line = (
+            '{"time":"2026-09-16T17:43:55","model":"Apator","codes":'
+            '["{158}ee6956cd8ef13cbc87b15e0577f7380561bd4bd8"],"rssi":-11.4,"snr":30.8}'
+        )
+        from_json = handle_rtl_line(json_line)
+        assert from_json and from_json["id"] == 30731042, from_json
+    finally:
+        DEVICES.clear()
+        DEVICES.update(prev)
+    assert parse_serial("301835244/1022") == 301835244
+    water_meta = meta_from_row(301835244, {"serial": "301835244/1022", "name": "Studená", "model": "E-RM30"})
+    assert on_air_id(301835244, water_meta) == 704488428 and water_meta["name"] == "Studená"
     assert 301835238 ^ 0x38000000 == 704488422
     assert 301835244 ^ 0x38000000 == 704488428
     assert on_air_id(301835238, {"model": "E-RM30"}) == 704488422
@@ -696,55 +787,57 @@ def self_check() -> None:
 
 
 def listen() -> int:
-    json_path = HERE / "rtl.jsonl"
-    if Path("/data").is_dir():
-        json_path = Path("/data/rtl.jsonl")
-    json_path.write_text("")
-    cmd = rtl_cmd()
-    cmd[cmd.index("-F") + 1] = f"json:{json_path}"
-    print("poslouchám", SETTINGS.get("frequency"), flush=True)
-    print(" ", " ".join(cmd), flush=True)
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     seen = 0
+    if Path("/data").is_dir() and not Path("/dev/bus/usb").exists():
+        print("USB v kontejneru není — vypni Protection mode, zkus USB 2.", flush=True)
     try:
-        with json_path.open(encoding="utf-8", errors="replace") as f:
-            while True:
-                if proc.poll() is not None:
-                    rest = f.read()
-                    for line in rest.splitlines():
+        while True:
+            cmd = rtl_cmd()
+            print("poslouchám", SETTINGS.get("frequency"), flush=True)
+            print(" ", " ".join(cmd), flush=True)
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1)
+            except FileNotFoundError:
+                print("rtl_433 chybí v image, čekám 10s", flush=True)
+                time.sleep(10)
+                continue
+            assert proc.stdout is not None
+            try:
+                while True:
+                    line = proc.stdout.readline()
+                    if line == "" and proc.poll() is not None:
+                        break
+                    if not line:
+                        continue
+                    try:
                         rec = handle_rtl_line(line)
-                        if rec:
-                            seen += 1
-                            on_packet(rec)
-                    break
-                line = f.readline()
-                if not line:
-                    time.sleep(0.25)
-                    continue
-                try:
-                    rec = handle_rtl_line(line)
-                except Exception as e:
-                    print(f"skip: {e}", flush=True)
-                    continue
-                if rec:
-                    seen += 1
-                    on_packet(rec)
+                    except Exception as e:
+                        print(f"skip: {e}", flush=True)
+                        continue
+                    if rec:
+                        seen += 1
+                        on_packet(rec)
+                    elif line.strip() and not line.lstrip().startswith("{"):
+                        print(line.rstrip(), flush=True)
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+            rc = proc.returncode
+            print(f"rtl_433 skončil ({rc}), telegramů {seen}, další pokus za 5s", flush=True)
+            time.sleep(5)
     except KeyboardInterrupt:
-        print("\nstop", flush=True)
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    print(f"telegramů: {seen}  log: {LOG}", flush=True)
-    return 0
+        print(f"\nstop  telegramů: {seen}  log: {LOG}", flush=True)
+        return 0
 
 
 def main(argv: list[str]) -> int:
     global SETTINGS
-    load_devices()
     SETTINGS = load_settings()
+    load_devices()
     if argv[1:] == ["check"] or argv[1:] == ["--check"]:
         self_check()
         return 0
@@ -755,6 +848,7 @@ def main(argv: list[str]) -> int:
     self_check()
     load_latest()
     start_http()
+    print(f"měřáků v konfiguraci: {len(DEVICES)}", flush=True)
     if SETTINGS.get("mqtt_host"):
         print(f"mqtt {SETTINGS['mqtt_host']}:{SETTINGS['mqtt_port']}", flush=True)
         for rec in list(STATE.values()):

@@ -1,0 +1,12 @@
+configuration:
+  frequency:
+    name: Frequency
+    description: RTL-SDR center frequency (Apator Metra uses 868.95M).
+  gain:
+    name: Tuner gain
+    description: FC0012 max is 19.2. Leave it unless you know the stick.
+  sample_rate:
+    name: Sample rate
+  devices:
+    name: Meters
+    description: Printed serial (301835244/1022 is fine). E-ITN30 = heat allocator, E-RM30 = water radio. MQTT entities are created only for this list.

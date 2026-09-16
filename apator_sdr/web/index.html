@@ -66,7 +66,7 @@
     <p id="status">Načítám…</p>
   </header>
   <main id="cards"></main>
-  <p class="empty" id="empty" hidden>Zatím žádný čistý telegram. E-ITN i E-RM vysílají na 868.95 MHz zhruba každé 4 minuty.</p>
+  <p class="empty" id="empty" hidden>V konfiguraci addonu přidej sériová čísla z potisku. E-ITN i E-RM vysílají na 868.95 MHz zhruba každé 4 minuty — neslyšené i cizí měřáky se tu objeví, do MQTT jdou jen ty z konfigurace.</p>
   <script>
     const cards = document.getElementById("cards");
     const empty = document.getElementById("empty");
@@ -81,10 +81,11 @@
       const devices = Object.values(state.devices || {});
       status.textContent = devices.length
         ? `Poslední aktualizace ${fmtTime(state.updated)} · ${devices.length} zařízení`
-        : "Čekám na první telegram";
+        : "Čekám na první telegram / konfiguraci";
       empty.hidden = devices.length > 0;
       cards.innerHTML = devices.map((d) => {
         const heat = d.model === "E-ITN30";
+        const unpaired = d.configured === false;
         const title = d.name || d.code || d.print || d.id;
         const main = heat
           ? `${d.current ?? "—"}<span class="unit">jedn.</span>`
@@ -95,8 +96,9 @@
         const crc = d.crc_ok === true ? "ok" : d.crc_ok === false ? "fail" : "čekám";
         const serial = d.print || d.id;
         const radio = d.print && d.id ? ` · rádio ${d.id}` : "";
+        const kind = (heat ? "E-ITN 30.2" : "E-RM 30") + (unpaired ? " · není v konfiguraci" : "");
         return `<article class="card ${heat ? "heat" : "water"}">
-          <div class="kind">${heat ? "E-ITN 30.2" : "E-RM 30"}</div>
+          <div class="kind">${kind}</div>
           <h2>${title}</h2>
           <div class="value">${main}</div>
           <dl>

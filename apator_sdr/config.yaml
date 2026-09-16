@@ -1,5 +1,5 @@
 name: Apator SDR
-version: "0.1.1"
+version: "0.1.2"
 slug: apator_sdr
 description: Odečet Apator Metra E-ITN 30.2 (teplo) a E-RM 30 (vodoměr) přes RTL-SDR na 868.95 MHz
 url: https://github.com/vajny/apator-sdr
@@ -32,10 +32,15 @@ options:
   frequency: "868.95M"
   gain: "19.2"
   sample_rate: "1024k"
+  devices: []
 schema:
   frequency: str
   gain: str
   sample_rate: str
+  devices:
+    - serial: str
+      name: str?
+      model: list(E-ITN30|E-RM30)
 map:
   - type: addon_config
     read_only: false

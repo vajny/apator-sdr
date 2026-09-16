@@ -2,19 +2,11 @@
 
 Odečet **Apator Metra E-ITN 30.2** (indikátor tepla) a **E-RM 30** (rádiový modul vodoměru) z RTL-SDR na **868.95 MHz**.
 
-Známá zařízení v `devices.json` (potisk / rádiové ID):
-
-- E-RM `301835244/1022` → rádio `704488428` — studená voda
-- E-RM `301835238/1022` → rádio `704488422` — teplá voda
-- E-ITN `30731079/0922` — topení ložnice
-- E-ITN `30731088/0922` — topení kuchyň
-- E-ITN `30731042/0922` — topení obývák (kód `i.P.E.3.2.`)
-
-U E-RM se potisk liší od ID ve vzduchu o `XOR 0x38000000`; do `devices.json` můžeš dát obě čísla.
+Měřáky se zadávají v konfiguraci addonu (sériové číslo z potisku). U E-RM se potisk liší od ID ve vzduchu o `XOR 0x38000000`; stačí napsat číslo z krabičky.
 
 ## Home Assistant OS (Raspberry Pi)
 
-Na Pi 4 s HAOS stačí USB RTL-SDR, Mosquitto a tenhle addon. Entity vzniknou samy přes MQTT discovery.
+Na Pi 4 s HAOS stačí USB RTL-SDR, Mosquitto a tenhle addon. Entity vzniknou přes MQTT discovery **jen pro měřáky z konfigurace**.
 
 ### 1. Mosquitto
 
@@ -31,26 +23,25 @@ Zastrč dongle do Pi. Na Pi 4 radši **USB 2** port (černý), USB 3 umí dělat
 
 1. Settings → Add-ons → Add-on store → ⋮ vpravo nahoře → **Repositories**.
 2. Vlož `https://github.com/vajny/apator-sdr` → Add.
-3. Obnov store (⋮ → Check for updates / reload).
-4. Nainstaluj **Apator SDR** (může to na Pi 4 chvíli trvat — image se staví lokálně).
-5. Zapni **Start on boot** a **Watchdog**, případně **Show in sidebar**.
-6. Start.
+3. Obnov store, nainstaluj **Apator SDR**.
+4. **Configuration** → pod *Měřáky* přidej řádky: sériové číslo, jméno, `E-ITN30` (topení) nebo `E-RM30` (voda). Save.
+5. Zapni **Start on boot**, **Watchdog**, **Show in sidebar** → Start.
 
-Po startu je v postranní liště panel **Apator** (stejný web jako lokálně). V Settings → Devices & services → MQTT se objeví zařízení *Studená voda*, *Teplá voda*, *Topení kuchyň*, *Topení obývák*, … jakmile přijde CRC ok telegram (~4 min).
-
-`devices.json` je v `/addon_configs/<repo>_apator_sdr/devices.json` (Samba share **addon_configs**). První start ho tam zkopíruje.
+V liště je panel **Apator**. Neslyšené / cizí měřáky se ukážou na webu (ať víš, co opsat), MQTT entity jen pro zadané sériovky. První čistý telegram bývá do ~4 min.
 
 ### Když dongle nevidí
 
-V logu addonu hledej `rtl_433` / `usb_claim`. Zkus:
+V logu hledej `usb_claim`, `No supported devices` nebo `rtl_433 skončil`. Zkus:
 
 - jiný USB port (USB 2)
 - v addonu vypnout **Protection mode**
 - Settings → System → Hardware, že `rtl2838` / `usb` tam je
 
-Tuner **FC0012** má slabší zisk; CRC občas opravíme podle známého sériového čísla.
+Tuner **FC0012** má slabší zisk; CRC občas opravíme podle zadaného sériového čísla.
 
 ## Lokálně (bez HA)
+
+Do `apator_sdr/devices.json` (viz `devices.example.json`):
 
 ```bash
 python3 apator_sdr/apator.py check

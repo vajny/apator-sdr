@@ -1,6 +1,6 @@
 FROM debian:bookworm-slim
 
-ARG BUILD_VERSION=0.1.1
+ARG BUILD_VERSION=0.1.2
 LABEL \
   io.hass.version="${BUILD_VERSION}" \
   io.hass.type="addon" \
@@ -11,7 +11,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/apator
-COPY apator.py devices.json ./
+COPY apator.py ./
 COPY web ./web
 COPY run.sh /run.sh
 RUN chmod +x /run.sh

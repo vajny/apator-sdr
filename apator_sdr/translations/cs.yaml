@@ -1,0 +1,12 @@
+configuration:
+  frequency:
+    name: Frekvence
+    description: Střed RTL-SDR. Apator Metra vysílá na 868.95M.
+  gain:
+    name: Zisk tuneru
+    description: FC0012 má maximum 19.2. Neměň, pokud nevíš.
+  sample_rate:
+    name: Vzorkování
+  devices:
+    name: Měřáky
+    description: Sériové číslo z potisku (klidně 30731042/0922). E-ITN30 = topení, E-RM30 = vodoměr. Do MQTT jdou jen tyhle.
