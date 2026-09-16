@@ -1,0 +1,28 @@
+{
+  "301835244": {
+    "model": "E-RM30",
+    "print": "301835244/1022",
+    "name": "Studená voda"
+  },
+  "301835238": {
+    "model": "E-RM30",
+    "print": "301835238/1022",
+    "name": "Teplá voda"
+  },
+  "30731079": {
+    "model": "E-ITN30",
+    "print": "30731079/0922",
+    "name": "Topení ložnice"
+  },
+  "30731088": {
+    "model": "E-ITN30",
+    "print": "30731088/0922",
+    "name": "Topení kuchyň"
+  },
+  "30731042": {
+    "model": "E-ITN30",
+    "code": "i.P.E.3.2.",
+    "print": "30731042/0922",
+    "name": "Topení obývák"
+  }
+}

@@ -92,18 +92,20 @@
         const extra = heat
           ? `<dt>Loni</dt><dd>${d.last_year ?? "—"}</dd>`
           : `<dt>Objem</dt><dd>${d.volume_m3 ?? "—"} m³</dd>`;
-        const crc = d.crc_ok ? "ok" : "fail";
+        const crc = d.crc_ok === true ? "ok" : d.crc_ok === false ? "fail" : "čekám";
+        const serial = d.print || d.id;
+        const radio = d.print && d.id ? ` · rádio ${d.id}` : "";
         return `<article class="card ${heat ? "heat" : "water"}">
           <div class="kind">${heat ? "E-ITN 30.2" : "E-RM 30"}</div>
           <h2>${title}</h2>
           <div class="value">${main}</div>
           <dl>
             ${extra}
-            <dt>Sériové č.</dt><dd>${d.id}${d.print ? " · " + d.print : ""}</dd>
+            <dt>Sériové č.</dt><dd>${serial}${radio}</dd>
             ${d.code ? `<dt>Kód</dt><dd>${d.code}</dd>` : ""}
             <dt>Datum v paketu</dt><dd>${d.date || "—"}</dd>
-            <dt>Slyšeno</dt><dd>${fmtTime(d.time || d.heard)}</dd>
-            <dt>Rádio</dt><dd><span class="dot ${d.crc_ok ? "" : "bad"}"></span>CRC ${crc}${d.snr != null ? " · SNR " + Number(d.snr).toFixed(1) + " dB" : ""}</dd>
+            <dt>Slyšeno</dt><dd>${d.crc_ok == null ? "zatím ne" : fmtTime(d.time || d.heard)}</dd>
+            <dt>Rádio</dt><dd><span class="dot ${d.crc_ok === true ? "" : "bad"}"></span>CRC ${crc}${d.snr != null ? " · SNR " + Number(d.snr).toFixed(1) + " dB" : ""}</dd>
           </dl>
         </article>`;
       }).join("");

@@ -1,6 +1,6 @@
 services:
   apator:
-    build: .
+    build: ./apator_sdr
     container_name: apator-sdr
     restart: unless-stopped
     devices:
@@ -14,4 +14,4 @@ services:
       MQTT_USER: "${MQTT_USER:-}"
       MQTT_PASSWORD: "${MQTT_PASSWORD:-}"
     volumes:
-      - ./devices.json:/opt/apator/devices.json:ro
+      - ./apator_sdr/devices.json:/opt/apator/devices.json:ro

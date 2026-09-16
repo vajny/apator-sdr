@@ -42,15 +42,22 @@ MQTT_LOCK = threading.Lock()
 HA_ANNOUNCED: set[int] = set()
 
 
+def on_air_id(raw_id: int, meta: dict) -> int:
+    # E-RM potisk (3018…) vs ID ve vzduchu (7044…): totéž pole XOR 0x38000000.
+    if meta.get("model") == "E-RM30" and raw_id < 0x20000000:
+        return raw_id ^ 0x38000000
+    return raw_id
+
+
 def load_devices() -> None:
     DEVICES.clear()
-    paths = [HERE / "devices.json", Path("/data/devices.json")]
+    paths = [HERE / "devices.json", Path("/data/devices.json"), Path("/config/devices.json")]
     merged: dict[str, dict] = {}
     for p in paths:
         if p.exists():
             merged.update(json.loads(p.read_text(encoding="utf-8")))
     for k, v in merged.items():
-        DEVICES[int(k)] = v
+        DEVICES[on_air_id(int(k), v)] = v
 
 
 def crc16(data: bytes, poly: int = 0x8005, init: int = 0xFFFF) -> int:
@@ -150,20 +157,6 @@ def repair_known(frame: bytes) -> dict | None:
 def annotate(rec: dict) -> dict:
     ident = int(rec["id"])
     info = DEVICES.get(ident)
-    if info is None:
-        best_d, best_id = 99, None
-        for kid, meta in DEVICES.items():
-            if meta.get("model") and meta["model"] != rec.get("model"):
-                continue
-            d = (ident ^ kid).bit_count()
-            if d < best_d:
-                best_d, best_id = d, kid
-        rec["id_hamming"] = best_d
-        rec["id_guess"] = best_id
-        if best_id is not None and best_d <= 2:
-            info = DEVICES[best_id]
-    else:
-        rec["id_hamming"] = 0
     if info:
         rec["code"] = info.get("code")
         rec["print"] = info.get("print")
@@ -359,7 +352,18 @@ def load_latest() -> None:
 
 def snapshot() -> dict:
     with STATE_LOCK:
-        devices = {str(k): v for k, v in STATE.items()}
+        if DEVICES:
+            devices = {}
+            for ident, meta in DEVICES.items():
+                rec = STATE.get(ident)
+                if rec:
+                    devices[str(ident)] = rec
+                else:
+                    devices[str(ident)] = annotate(
+                        {"id": ident, "model": meta.get("model"), "crc_ok": None}
+                    )
+        else:
+            devices = {str(k): v for k, v in STATE.items()}
     updated = None
     for rec in devices.values():
         t = rec.get("time") or rec.get("heard")
@@ -684,6 +688,10 @@ def self_check() -> None:
     )
     from_json = handle_rtl_line(json_line)
     assert from_json and from_json["id"] == 30731042, from_json
+    assert 301835238 ^ 0x38000000 == 704488422
+    assert 301835244 ^ 0x38000000 == 704488428
+    assert on_air_id(301835238, {"model": "E-RM30"}) == 704488422
+    assert on_air_id(704488422, {"model": "E-RM30"}) == 704488422
     print("self-check ok", flush=True)
 
 

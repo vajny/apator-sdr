@@ -2,9 +2,7 @@
 
 RTL-SDR odečet Apator Metra **E-ITN 30.2** a **E-RM 30** (868.95 MHz).
 
-Návod k Home Assistant addon i lokálnímu běhu je v [DOCS.md](DOCS.md).
+- Lokálně: `python3 apator_sdr/apator.py` → <http://127.0.0.1:8099/>
+- Home Assistant OS: přidej tohle repo jako addon — [návod](apator_sdr/DOCS.md)
 
-```bash
-python3 apator.py
-# http://127.0.0.1:8099/
-```
+Repo pro Add-on store: `https://github.com/vajny/apator-sdr`

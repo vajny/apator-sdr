@@ -1,5 +1,11 @@
 FROM debian:bookworm-slim
 
+ARG BUILD_VERSION=0.1.1
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="addon" \
+  io.hass.arch="aarch64|amd64|armv7"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 rtl-433 rtl-sdr ca-certificates \
  && rm -rf /var/lib/apt/lists/*
