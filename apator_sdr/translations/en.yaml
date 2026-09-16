@@ -7,7 +7,7 @@ configuration:
     description: Next to the riser use 17.9 (19.2 overloads close water meters). auto = AGC.
   sample_rate:
     name: Sample rate
-    description: 250k = narrower band, less junk. 1024k only if a weak heat allocator is missing.
+    description: 250k fails USB start on this dongle. Keep 1024k.
   devices:
     name: Meters
     description: Printed serial (301835244/1022 is fine). E-ITN30 = heat allocator, E-RM30 = water radio. MQTT entities are created only for this list.

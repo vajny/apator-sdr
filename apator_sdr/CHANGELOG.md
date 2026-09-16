@@ -4,6 +4,12 @@ Všechny podstatné změny v Apator SDR. Formát [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-09-17
+
+### Fixed
+
+- 250k na FC0012/rtl_433 25.12 spadne na `Input device start failed`. Addon to přepne na 1024k (i když v konfiguraci ještě visí 250k).
+
 ## [0.1.12] - 2026-09-17
 
 ### Changed

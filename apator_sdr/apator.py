@@ -194,7 +194,7 @@ def persist_devices() -> None:
         "options": {
             "frequency": _opt(opts, "frequency", SETTINGS.get("frequency") or "868.95M"),
             "gain": _opt(opts, "gain", SETTINGS.get("gain") or "17.9"),
-            "sample_rate": _opt(opts, "sample_rate", SETTINGS.get("sample_rate") or "250k"),
+            "sample_rate": _opt(opts, "sample_rate", SETTINGS.get("sample_rate") or "1024k"),
             "devices": devices_as_options(),
         }
     }).encode()
@@ -1144,7 +1144,7 @@ def load_settings() -> dict:
     s = {
         "frequency": os.environ.get("FREQUENCY", "868.95M"),
         "gain": os.environ.get("GAIN", "17.9"),
-        "sample_rate": os.environ.get("SAMPLE_RATE", "250k"),
+        "sample_rate": os.environ.get("SAMPLE_RATE", "1024k"),
         "web_port": int(os.environ.get("WEB_PORT", "8099")),
         "mqtt_host": os.environ.get("MQTT_HOST", ""),
         "mqtt_port": int(os.environ.get("MQTT_PORT", "1883")),
@@ -1216,13 +1216,22 @@ def rtl_gain_arg() -> str | None:
     return g
 
 
+def rtl_sample_rate() -> str:
+    raw = str(SETTINGS.get("sample_rate") or "1024k").strip()
+    key = raw.lower().replace(" ", "")
+    # rtl_433 25.12 + this stick: 250k opens, then "Input device start failed".
+    if key in ("250k", "250000", "256k", "225k"):
+        return "1024k"
+    return raw or "1024k"
+
+
 def rtl_cmd() -> list[str]:
     cmd = [
         "rtl_433",
         "-d", "0",
         "-v",
         "-f", str(SETTINGS.get("frequency") or "868.95M"),
-        "-s", str(SETTINGS.get("sample_rate") or "250k"),
+        "-s", rtl_sample_rate(),
         "-Y", "minmax",
         "-Y", "autolevel",
         "-Y", "magest",
@@ -1344,6 +1353,13 @@ def self_check() -> None:
     assert gain_is_auto() and "-g" not in rtl_cmd()
     SETTINGS["gain"] = 18
     assert rtl_gain() == "18" and rtl_gain_arg() == "18"
+    prev_s = SETTINGS.get("sample_rate")
+    SETTINGS["sample_rate"] = "250k"
+    assert "-s 1024k" in " ".join(rtl_cmd())
+    if prev_s is None:
+        SETTINGS.pop("sample_rate", None)
+    else:
+        SETTINGS["sample_rate"] = prev_s
     note_log_level("Found Fitipower FC0012 tuner")
     note_log_level("SDR: Tuner gain set to 19.200000 dB.")
     assert RADIO.get("tuner", "").startswith("Fitipower") and RADIO.get("gain_db") == 19.2
@@ -1402,11 +1418,13 @@ def listen() -> int:
                 print(f"aktivní zisk: žádám {got} dB  (0 u rtl_433 je Auto, proto minimum)", flush=True)
             else:
                 print(f"aktivní zisk: žádám {got} dB", flush=True)
-            print("poslouchám", SETTINGS.get("frequency"), SETTINGS.get("sample_rate"), flush=True)
+            sr = rtl_sample_rate()
+            asked_sr = str(SETTINGS.get("sample_rate") or sr)
+            if sr != asked_sr:
+                print(f"vzorkování {asked_sr} na tomhle sticku nespustí USB, beru {sr}", flush=True)
+            print("poslouchám", SETTINGS.get("frequency"), sr, flush=True)
             print(" ", " ".join(cmd), flush=True)
-            sr = str(SETTINGS.get("sample_rate") or "")
-            if str(asked) == "19.2" or "1024" in sr:
-                print("tip: u stupaček 17.9 dB + 250k (19.2/1024k přebíjí vodu a tahá cizí 868)", flush=True)
+            usb_fail = False
             try:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
@@ -1423,6 +1441,8 @@ def listen() -> int:
                         break
                     if not line:
                         continue
+                    if "Input device start failed" in line:
+                        usb_fail = True
                     if not line.lstrip().startswith("{"):
                         note_log_level(line)
                     try:
@@ -1448,6 +1468,9 @@ def listen() -> int:
                     except subprocess.TimeoutExpired:
                         proc.kill()
             rc = proc.returncode
+            if usb_fail and rtl_sample_rate() != "1024k":
+                SETTINGS["sample_rate"] = "1024k"
+                print("USB start fail — příště 1024k", flush=True)
             print(f"rtl_433 skončil ({rc}), telegramů {seen}, další pokus za 5s", flush=True)
             time.sleep(5)
     except KeyboardInterrupt:
