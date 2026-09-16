@@ -986,14 +986,23 @@ def rtl_gain() -> str:
 
 
 def gain_is_auto(g: str | None = None) -> bool:
-    # rtl_433: atof(g)*10 == 0 → Auto, not 0 dB. See sdr_set_tuner_gain.
-    s = (g if g is not None else rtl_gain()).strip().lower().replace(",", ".")
-    if s in ("auto", ""):
-        return True
+    s = (g if g is not None else rtl_gain()).strip().lower()
+    return s == "auto"
+
+
+def rtl_gain_arg() -> str | None:
+    # rtl_433: atof(g)*10 == 0 → Auto. 0 in HA therefore cannot mean 0 dB.
+    # -9.9 is FC0012 minimum; R820T snaps it up to its own floor.
+    g = rtl_gain()
+    if gain_is_auto(g):
+        return None
+    s = g.replace(",", ".")
     try:
-        return abs(float(s)) < 0.05
+        if abs(float(s)) < 0.05:
+            return "-9.9"
     except ValueError:
-        return False
+        pass
+    return g
 
 
 def rtl_cmd() -> list[str]:
@@ -1013,8 +1022,8 @@ def rtl_cmd() -> list[str]:
         "-F", "log",
         "-F", "json",
     ]
-    g = rtl_gain()
-    if not gain_is_auto(g):
+    g = rtl_gain_arg()
+    if g is not None:
         cmd[4:4] = ["-g", g]
     if shutil.which("stdbuf"):
         cmd = ["stdbuf", "-oL", *cmd]
@@ -1117,9 +1126,11 @@ def self_check() -> None:
     assert miss and "nešlo dekódovat" in miss and "abcd" in miss, miss
     prev_g = SETTINGS.get("gain")
     SETTINGS["gain"] = "0"
+    assert rtl_gain_arg() == "-9.9" and "-9.9" in rtl_cmd()
+    SETTINGS["gain"] = "auto"
     assert gain_is_auto() and "-g" not in rtl_cmd()
     SETTINGS["gain"] = "19.2"
-    assert not gain_is_auto() and "19.2" in rtl_cmd()
+    assert rtl_gain_arg() == "19.2" and "19.2" in rtl_cmd()
     if prev_g is None:
         SETTINGS.pop("gain", None)
     else:
@@ -1134,11 +1145,14 @@ def listen() -> int:
     try:
         while True:
             cmd = rtl_cmd()
-            g = rtl_gain()
-            if gain_is_auto(g):
-                print("aktivní zisk: Auto  (0 v konfiguraci u rtl_433 není 0 dB)", flush=True)
+            asked = rtl_gain()
+            got = rtl_gain_arg()
+            if got is None:
+                print("aktivní zisk: Auto", flush=True)
+            elif got != asked:
+                print(f"aktivní zisk: žádám {got} dB  (0 u rtl_433 je Auto, proto minimum)", flush=True)
             else:
-                print(f"aktivní zisk: žádám {g} dB", flush=True)
+                print(f"aktivní zisk: žádám {got} dB", flush=True)
             print("poslouchám", SETTINGS.get("frequency"), flush=True)
             print(" ", " ".join(cmd), flush=True)
             try:
@@ -1202,9 +1216,16 @@ def main(argv: list[str]) -> int:
     self_check()
     load_latest()
     start_http()
+    asked = rtl_gain()
+    got = rtl_gain_arg()
+    if got is None:
+        gain_s = "auto"
+    elif got != asked:
+        gain_s = f"{asked}→{got} dB"
+    else:
+        gain_s = f"{got} dB"
     print(
-        f"měřáků v konfiguraci: {len(DEVICES)}  gain={rtl_gain()}"
-        f"{' (Auto)' if gain_is_auto() else ' dB'}  "
+        f"měřáků v konfiguraci: {len(DEVICES)}  gain={gain_s}  "
         f"{SETTINGS.get('frequency')}  {SETTINGS.get('sample_rate')}",
         flush=True,
     )

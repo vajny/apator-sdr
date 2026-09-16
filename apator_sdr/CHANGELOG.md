@@ -4,6 +4,12 @@ Všechny podstatné změny v Apator SDR. Formát [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-09-17
+
+### Fixed
+
+- `gain=0` už nepouští AGC (to u stupaček ohluchlo). Jde to na minimum tuneru (−9.9 dB). Auto jen když napíšeš `auto`.
+
 ## [0.1.8] - 2026-09-17
 
 ### Fixed
